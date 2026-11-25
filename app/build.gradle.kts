@@ -13,8 +13,8 @@ android {
     applicationId = "com.example.kugsyz"
     minSdk = 24
     targetSdk = 36
-    versionCode = System.getenv("LATEST_BUILD")?.toIntOrNull() ?: 1
-    versionName = System.getenv("VERSION_NAME")?.takeIf { it.isNotBlank() } ?: "1.0.0"
+    versionCode = System.getenv("LATEST_BUILD")?.toIntOrNull() ?: 2
+    versionName = System.getenv("VERSION_NAME")?.takeIf { it.isNotBlank() } ?: "1.0.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
