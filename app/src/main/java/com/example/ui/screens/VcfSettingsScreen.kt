@@ -994,6 +994,9 @@ fun VcfSettingsScreen(
             Row(verticalAlignment = Alignment.CenterVertically) {
               RefineryLogo(modifier = Modifier.size(64.dp), withBackground = true)
               Spacer(modifier = Modifier.width(16.dp))
+              val installedSig = remember(context) {
+                AppUpdateManager.shortFingerprint(AppUpdateManager.getInstalledSigningSha256(context))
+              }
               Column {
                 Text(
                   text = "Tank Calc v${installedVerInfo.second} (Build ${installedVerInfo.first})",
@@ -1002,6 +1005,11 @@ fun VcfSettingsScreen(
                 )
                 Text("Refinery tank volume & loss calculator", style = MaterialTheme.typography.bodyMedium)
                 Text("Developed by Meherab Hossain Jihad", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                Text(
+                  text = "Signing Key: $installedSig",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
               }
             }
 

@@ -1,7 +1,7 @@
 {
-  "latest_build": 2,
-  "version_name": "1.0.2",
+  "latest_build": 4,
+  "version_name": "1.0.3",
   "apk_url": "https://github.com/mhjihad2001/Tank-Calc-2.0/releases/latest/download/app-release.apk",
   "force_update": false,
-  "changelog": "Fixed permanent release keystore reuse in automated GitHub builds to prevent signature conflicts on future in-app updates, enhanced GitHub update manifest fallbacks, and secured backup file exports behind master password protection."
+  "changelog": "Added pre-install SHA-256 signing key verification in the update dialog with 1-tap browser download fallback, and displayed the installed app signing fingerprint in Settings."
 }

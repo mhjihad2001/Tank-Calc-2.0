@@ -39,6 +39,12 @@ sealed class UpdateCheckResult {
   data class Error(val message: String) : UpdateCheckResult()
 }
 
+data class ApkSignatureCheckResult(
+  val installedSha256: String?,
+  val downloadedSha256: String?,
+  val matches: Boolean
+)
+
 object AppUpdateManager {
 
   const val DEFAULT_GITHUB_OWNER = "mhjihad2001"
@@ -53,6 +59,102 @@ object AppUpdateManager {
       .followRedirects(true)
       .followSslRedirects(true)
       .build()
+  }
+
+  private fun sha256Fingerprint(bytes: ByteArray): String {
+    val digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+    return digest.joinToString(":") { b -> "%02X".format(b) }
+  }
+
+  private fun extractCertSha256(pkgInfo: android.content.pm.PackageInfo?): String? {
+    if (pkgInfo == null) return null
+    return try {
+      val certBytes: ByteArray? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        val signingInfo = pkgInfo.signingInfo
+        val sigs = if (signingInfo?.hasMultipleSigners() == true) {
+          signingInfo.apkContentsSigners
+        } else {
+          signingInfo?.signingCertificateHistory
+        }
+        sigs?.firstOrNull()?.toByteArray()
+      } else {
+        @Suppress("DEPRECATION")
+        pkgInfo.signatures?.firstOrNull()?.toByteArray()
+      }
+      certBytes?.let { sha256Fingerprint(it) }
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  fun getInstalledSigningSha256(context: Context): String? {
+    return try {
+      val pm = context.packageManager
+      val pkgInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        pm.getPackageInfo(
+          context.packageName,
+          PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong())
+        )
+      } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        @Suppress("DEPRECATION")
+        pm.getPackageInfo(context.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+      } else {
+        @Suppress("DEPRECATION")
+        pm.getPackageInfo(context.packageName, PackageManager.GET_SIGNATURES)
+      }
+      extractCertSha256(pkgInfo)
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  fun getApkSigningSha256(context: Context, apkFile: File): String? {
+    return try {
+      val pm = context.packageManager
+      val pkgInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        pm.getPackageArchiveInfo(
+          apkFile.absolutePath,
+          PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong())
+        )
+      } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        @Suppress("DEPRECATION")
+        pm.getPackageArchiveInfo(apkFile.absolutePath, PackageManager.GET_SIGNING_CERTIFICATES)
+      } else {
+        @Suppress("DEPRECATION")
+        pm.getPackageArchiveInfo(apkFile.absolutePath, PackageManager.GET_SIGNATURES)
+      }
+      extractCertSha256(pkgInfo)
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  fun verifySignatureMatch(context: Context, apkFile: File): ApkSignatureCheckResult {
+    val installed = getInstalledSigningSha256(context)
+    val downloaded = getApkSigningSha256(context, apkFile)
+    val matches = installed == null || downloaded == null || installed.equals(downloaded, ignoreCase = true)
+    return ApkSignatureCheckResult(
+      installedSha256 = installed,
+      downloadedSha256 = downloaded,
+      matches = matches
+    )
+  }
+
+  fun shortFingerprint(sha256: String?): String {
+    if (sha256.isNullOrBlank()) return "Unknown"
+    return if (sha256.length > 23) "${sha256.take(23)}..." else sha256
+  }
+
+  fun openApkDownloadInBrowser(context: Context, apkUrl: String): Result<Unit> {
+    return try {
+      val intent = Intent(Intent.ACTION_VIEW, Uri.parse(apkUrl)).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      }
+      context.startActivity(intent)
+      Result.success(Unit)
+    } catch (e: Exception) {
+      Result.failure(e)
+    }
   }
 
   fun getInstalledVersionInfo(context: Context): Pair<Int, String> {

@@ -39,6 +39,7 @@ fun AppUpdateDialog(
   var isDownloading by remember { mutableStateOf(false) }
   var downloadProgress by remember { mutableIntStateOf(0) }
   var downloadedApkFile by remember { mutableStateOf<File?>(null) }
+  var signatureConflict by remember { mutableStateOf<com.example.engine.ApkSignatureCheckResult?>(null) }
   var errorMessage by remember { mutableStateOf<String?>(null) }
 
   val isForce = manifest.forceUpdate
@@ -164,6 +165,52 @@ fun AppUpdateDialog(
           }
         }
 
+        if (signatureConflict != null) {
+          val conflict = signatureConflict!!
+          Surface(
+            color = MaterialTheme.colorScheme.errorContainer,
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.fillMaxWidth()
+          ) {
+            Column(
+              modifier = Modifier.padding(12.dp),
+              verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+              Text(
+                text = "Different App Signature Detected (Error -7)",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.ExtraBold,
+                color = MaterialTheme.colorScheme.onErrorContainer
+              )
+              Text(
+                text = "Your currently installed app was signed with a different key (for example, an AI Studio APK or older build). Android requires a 1-time uninstall before switching to the permanent GitHub Release key.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer
+              )
+              Text(
+                text = "Installed Key: ${AppUpdateManager.shortFingerprint(conflict.installedSha256)}\nRelease APK Key: ${AppUpdateManager.shortFingerprint(conflict.downloadedSha256)}",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onErrorContainer
+              )
+              Text(
+                text = "Steps: 1) Download APK in browser (saves to Downloads), 2) Uninstall this old app once, 3) Install the downloaded APK. All future updates will work directly!",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onErrorContainer
+              )
+              OutlinedButton(
+                onClick = {
+                  AppUpdateManager.openApkDownloadInBrowser(context, manifest.apkUrl)
+                },
+                modifier = Modifier.fillMaxWidth()
+              ) {
+                Text("Download APK in Browser")
+              }
+            }
+          }
+        }
+
         if (errorMessage != null) {
           Surface(
             color = MaterialTheme.colorScheme.errorContainer,
@@ -188,7 +235,7 @@ fun AppUpdateDialog(
           haptics.trigger(HapticEvent.MODE_SWITCH)
           errorMessage = null
 
-          // If APK was already downloaded (e.g. returning from Unknown Sources permission toggle), install immediately
+          // If APK was already downloaded (e.g. returning from Unknown Sources permission toggle or user retries anyway), launch installer
           val readyFile = downloadedApkFile
           if (readyFile != null && readyFile.exists()) {
             val installRes = AppUpdateManager.installDownloadedApk(context, readyFile)
@@ -200,6 +247,7 @@ fun AppUpdateDialog(
 
           isDownloading = true
           downloadProgress = 0
+          signatureConflict = null
           scope.launch {
             val res = AppUpdateManager.downloadApkWithProgress(
               context = context,
@@ -210,10 +258,16 @@ fun AppUpdateDialog(
             res.fold(
               onSuccess = { apkFile ->
                 downloadedApkFile = apkFile
-                haptics.trigger(HapticEvent.SUCCESS)
-                val installRes = AppUpdateManager.installDownloadedApk(context, apkFile)
-                installRes.onFailure { err ->
-                  errorMessage = err.localizedMessage ?: "Failed to launch installer."
+                val sigCheck = AppUpdateManager.verifySignatureMatch(context, apkFile)
+                if (!sigCheck.matches) {
+                  signatureConflict = sigCheck
+                  haptics.trigger(HapticEvent.WARNING_ALERT)
+                } else {
+                  haptics.trigger(HapticEvent.SUCCESS)
+                  val installRes = AppUpdateManager.installDownloadedApk(context, apkFile)
+                  installRes.onFailure { err ->
+                    errorMessage = err.localizedMessage ?: "Failed to launch installer."
+                  }
                 }
               },
               onFailure = { err ->
@@ -234,6 +288,7 @@ fun AppUpdateDialog(
         Text(
           when {
             isDownloading -> "Downloading ($downloadProgress%)..."
+            signatureConflict != null -> "Try Install Anyway"
             downloadedApkFile?.exists() == true -> "Install Update Now"
             else -> "Update Now"
           }
