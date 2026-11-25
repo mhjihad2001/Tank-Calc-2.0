@@ -196,7 +196,7 @@ fun MenuHubScreen(
       ),
       MenuCategorySection(
         title = "Master Data, Calibration & System",
-        subtitle = "Charts, product catalog, drafts & backups",
+        subtitle = "Charts, product catalog, drafts & system",
         items = listOf(
           MenuModuleItem(
             destination = MenuDestination.TANK_MASTER,
@@ -237,8 +237,8 @@ fun MenuHubScreen(
           ),
           MenuModuleItem(
             destination = MenuDestination.SETTINGS_BACKUP,
-            title = "Settings & Backup",
-            subtitle = "Units, reports & JSON sync",
+            title = "App Settings",
+            subtitle = "Units, haptics, reports & updates",
             icon = Icons.Default.Settings,
             accentColor = royalBlue
           )
@@ -490,6 +490,7 @@ fun MenuHubScreen(
       val installedVer = remember(context) { com.example.engine.AppUpdateManager.getInstalledVersionInfo(context) }
       var isChecking by remember { mutableStateOf(false) }
       var menuUpdateAvailable by remember { mutableStateOf<com.example.engine.UpdateCheckResult.UpdateAvailable?>(null) }
+      var menuUpdateStatus by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
 
       Column(
         modifier = Modifier
@@ -526,8 +527,11 @@ fun MenuHubScreen(
             onClick = {
               haptics.trigger(com.example.engine.HapticEvent.MODE_SWITCH)
               isChecking = true
+              menuUpdateStatus = null
               scope.launch {
-                when (val res = com.example.engine.AppUpdateManager.checkForUpdates(context)) {
+                val manifestUrl = settings.customUpdateManifestUrl
+                  .ifBlank { com.example.engine.AppUpdateManager.DEFAULT_MANIFEST_URL }
+                when (val res = com.example.engine.AppUpdateManager.checkForUpdates(context, manifestUrl)) {
                   is com.example.engine.UpdateCheckResult.UpdateAvailable -> {
                     isChecking = false
                     haptics.trigger(com.example.engine.HapticEvent.SUCCESS)
@@ -536,7 +540,8 @@ fun MenuHubScreen(
                   is com.example.engine.UpdateCheckResult.UpToDate -> {
                     isChecking = false
                     haptics.trigger(com.example.engine.HapticEvent.SUCCESS)
-                     android.widget.Toast.makeText(
+                    menuUpdateStatus = Pair(false, "Up to date (v${res.currentVersionName}, Build ${res.currentBuild})")
+                    android.widget.Toast.makeText(
                       context,
                       "Up to date (v${res.currentVersionName})",
                       android.widget.Toast.LENGTH_SHORT
@@ -545,10 +550,11 @@ fun MenuHubScreen(
                   is com.example.engine.UpdateCheckResult.Error -> {
                     isChecking = false
                     haptics.trigger(com.example.engine.HapticEvent.WARNING_ALERT)
+                    menuUpdateStatus = Pair(true, res.message)
                     android.widget.Toast.makeText(
                       context,
-                      "Update check failed: ${res.message}",
-                      android.widget.Toast.LENGTH_SHORT
+                      res.message,
+                      android.widget.Toast.LENGTH_LONG
                     ).show()
                   }
                 }
@@ -569,6 +575,15 @@ fun MenuHubScreen(
               fontWeight = FontWeight.Bold
             )
           }
+        }
+
+        menuUpdateStatus?.let { (isErr, msg) ->
+          Text(
+            text = msg,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (isErr) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+            modifier = Modifier.fillMaxWidth()
+          )
         }
       }
 

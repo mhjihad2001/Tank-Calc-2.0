@@ -242,7 +242,8 @@ data class AppSettings(
   val lastCloudSyncTimestamp: Long = 0L,
   val hapticsEnabled: Boolean = true,
   val hapticIntensity: Int = 2, // 1 = Light, 2 = Medium (Industrial), 3 = Strong (Field Glove)
-  val useInAppKeyboard: Boolean = true
+  val useInAppKeyboard: Boolean = true,
+  val customUpdateManifestUrl: String = ""
 )
 
 data class BlendStage(

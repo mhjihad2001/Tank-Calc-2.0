@@ -207,7 +207,9 @@ class MainActivity : ComponentActivity() {
 
           LaunchedEffect(Unit) {
             try {
-              val res = com.example.engine.AppUpdateManager.checkForUpdates(context)
+              val manifestUrl = repository.settings.value.customUpdateManifestUrl
+                .ifBlank { com.example.engine.AppUpdateManager.DEFAULT_MANIFEST_URL }
+              val res = com.example.engine.AppUpdateManager.checkForUpdates(context, manifestUrl)
               if (res is com.example.engine.UpdateCheckResult.UpdateAvailable) {
                 availableUpdate = res
               }

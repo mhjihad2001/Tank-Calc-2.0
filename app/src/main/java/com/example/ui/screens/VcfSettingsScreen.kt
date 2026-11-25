@@ -19,6 +19,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -62,7 +63,9 @@ fun VcfSettingsScreen(
   var showChangePasswordDialog by remember { mutableStateOf(false) }
   var showAuthForPassword by remember { mutableStateOf(false) }
 
-  // Export verification dialog state
+  // Export verification dialog state (HIDDEN by default; unlocked ONLY via Master Password)
+  var backupExportUnlocked by remember { mutableStateOf(false) }
+  var showUnlockBackupExportDialog by remember { mutableStateOf(false) }
   var exportVerification by remember { mutableStateOf<ExportVerificationResult?>(null) }
   var showExportDialog by remember { mutableStateOf(false) }
   var includeDraftsInBackup by remember { mutableStateOf(false) }
@@ -89,6 +92,11 @@ fun VcfSettingsScreen(
   val installedVerInfo = remember(context) { AppUpdateManager.getInstalledVersionInfo(context) }
   var isCheckingUpdate by remember { mutableStateOf(false) }
   var updateCheckStatusText by remember { mutableStateOf<String?>(null) }
+  var updateCheckIsError by remember { mutableStateOf(false) }
+  var showUpdateSourceConfig by remember { mutableStateOf(false) }
+  var updateManifestUrlDraft by remember(settings.customUpdateManifestUrl) {
+    mutableStateOf(settings.customUpdateManifestUrl)
+  }
   var availableUpdateResult by remember { mutableStateOf<UpdateCheckResult.UpdateAvailable?>(null) }
   val haptics = com.example.engine.rememberHapticController()
 
@@ -139,7 +147,7 @@ fun VcfSettingsScreen(
   val showVcfCalc = sectionMode != SettingsSectionMode.SETTINGS_AND_BACKUP
 
   AppScreen(
-    title = if (sectionMode == SettingsSectionMode.VCF_CALCULATOR_ONLY) "ASTM D1250-80 VCF" else "Settings & Backup",
+    title = if (sectionMode == SettingsSectionMode.VCF_CALCULATOR_ONLY) "ASTM D1250-80 VCF" else "App Settings",
     onBack = onBack,
     actions = {
       if (sectionMode == SettingsSectionMode.VCF_CALCULATOR_ONLY) {
@@ -372,118 +380,14 @@ fun VcfSettingsScreen(
         }
       }
 
-      // 2. Full Backup & Restore Section
+      // 2. Cloud Sync & Data Recovery Section (Backup File Export is HIDDEN behind Master Password below)
       item {
         Divider()
-        Text("Full Backup & Restore (One-File Ready)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-      }
-
-      if (daysSinceLastBackup > 7L) {
-        item {
-          Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-              Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.onErrorContainer)
-              Spacer(modifier = Modifier.width(8.dp))
-              Text(
-                "Reminder: No full backup made in over 7 days. Protect your refinery calibration and data!",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onErrorContainer
-              )
-            }
-          }
-        }
-      }
-
-      item {
-        val lastDateStr = if (settings.lastBackupTimestamp > 0L) {
-          SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(settings.lastBackupTimestamp))
-        } else {
-          "Never"
-        }
-        Text("Last Backup: $lastDateStr", style = MaterialTheme.typography.bodyMedium)
+        Text("Cloud Sync & Data Recovery", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
       }
 
       item {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
-          ) {
-            Checkbox(
-              checked = includeDraftsInBackup,
-              onCheckedChange = { includeDraftsInBackup = it }
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-              "Include drafts in backup (excluded by default)",
-              style = MaterialTheme.typography.bodySmall
-            )
-          }
-
-          // (a) Full Backup
-          Button(
-            onClick = {
-              val result = BackupManager.exportAndVerify(context, repository, isSetupOnly = false, includeDrafts = includeDraftsInBackup)
-              exportVerification = result
-              showExportDialog = true
-            },
-            modifier = Modifier.fillMaxWidth()
-          ) {
-            Icon(Icons.Default.CloudUpload, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Export Full Backup (Includes All Data & Calibration)")
-          }
-
-          // (b) Setup File (No History)
-          OutlinedButton(
-            onClick = {
-              val result = BackupManager.exportAndVerify(context, repository, isSetupOnly = true)
-              exportVerification = result
-              showExportDialog = true
-            },
-            modifier = Modifier.fillMaxWidth()
-          ) {
-            Icon(Icons.Default.Tune, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Export Setup File (No History, Ready to Use)")
-          }
-
-          // Self-Test button
-          OutlinedButton(
-            onClick = {
-              val test = BackupManager.runSelfTest(context, repository)
-              selfTestResult = test
-              showSelfTestDialog = true
-            },
-            modifier = Modifier.fillMaxWidth()
-          ) {
-            Icon(Icons.Default.FactCheck, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Run Backup Self-Test (Verify All Calibration Tables)")
-          }
-
-          // Human readable Excel export
-          OutlinedButton(
-            onClick = {
-              val uri = BackupManager.exportAllDataExcelCsv(context, repository)
-              if (uri != null) {
-                val intent = Intent(Intent.ACTION_SEND).apply {
-                  type = "text/csv"
-                  putExtra(Intent.EXTRA_STREAM, uri)
-                  addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-                context.startActivity(Intent.createChooser(intent, "Share TankCalc Data Report"))
-              } else {
-                Toast.makeText(context, "Failed to export report.", Toast.LENGTH_SHORT).show()
-              }
-            },
-            modifier = Modifier.fillMaxWidth()
-          ) {
-            Icon(Icons.Default.Description, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Export All Data to Excel / CSV")
-          }
-
           // Direct Google Drive / Cloud Import Card
           Card(
             shape = RoundedCornerShape(14.dp),
@@ -907,6 +811,175 @@ fun VcfSettingsScreen(
         }
       }
 
+      // Hidden Admin Backup File Export Gate (Always hidden by default; requires Master Password to unhide)
+      item {
+        if (!backupExportUnlocked) {
+          OutlinedButton(
+            onClick = {
+              haptics.trigger(com.example.engine.HapticEvent.MODE_SWITCH)
+              showUnlockBackupExportDialog = true
+            },
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("unlock_backup_export_button")
+          ) {
+            Icon(Icons.Default.AdminPanelSettings, contentDescription = "Master Password Required")
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Admin Backup Export (Master Password)")
+          }
+        } else {
+          val lastDateStr = if (settings.lastBackupTimestamp > 0L) {
+            SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(settings.lastBackupTimestamp))
+          } else {
+            "Never"
+          }
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("unlocked_backup_export_panel")
+          ) {
+            Column(
+              modifier = Modifier.padding(14.dp),
+              verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  modifier = Modifier.weight(1f)
+                ) {
+                  Icon(Icons.Default.LockOpen, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                  Column {
+                    Text(
+                      "Backup File Export (Unlocked)",
+                      style = MaterialTheme.typography.titleSmall,
+                      fontWeight = FontWeight.Bold,
+                      color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                      "Last Backup: $lastDateStr",
+                      style = MaterialTheme.typography.labelSmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                  }
+                }
+                TextButton(
+                  onClick = {
+                    haptics.trigger(com.example.engine.HapticEvent.MODE_SWITCH)
+                    backupExportUnlocked = false
+                  },
+                  modifier = Modifier.testTag("lock_backup_export_button")
+                ) {
+                  Icon(Icons.Default.VisibilityOff, contentDescription = "Hide Export Options", modifier = Modifier.size(16.dp))
+                  Spacer(modifier = Modifier.width(4.dp))
+                  Text("Hide")
+                }
+              }
+
+              if (daysSinceLastBackup > 7L) {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                  Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                      "Reminder: No full backup made in over 7 days.",
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                  }
+                }
+              }
+
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+              ) {
+                Checkbox(
+                  checked = includeDraftsInBackup,
+                  onCheckedChange = { includeDraftsInBackup = it }
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                  "Include drafts in backup (excluded by default)",
+                  style = MaterialTheme.typography.bodySmall
+                )
+              }
+
+              Button(
+                onClick = {
+                  val result = BackupManager.exportAndVerify(context, repository, isSetupOnly = false, includeDrafts = includeDraftsInBackup)
+                  exportVerification = result
+                  showExportDialog = true
+                },
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .testTag("export_full_backup_button")
+              ) {
+                Icon(Icons.Default.CloudUpload, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Export Full Backup (All Data & Calibration)")
+              }
+
+              OutlinedButton(
+                onClick = {
+                  val result = BackupManager.exportAndVerify(context, repository, isSetupOnly = true)
+                  exportVerification = result
+                  showExportDialog = true
+                },
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .testTag("export_setup_file_button")
+              ) {
+                Icon(Icons.Default.Tune, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Export Setup File (No History, Ready to Use)")
+              }
+
+              OutlinedButton(
+                onClick = {
+                  val test = BackupManager.runSelfTest(context, repository)
+                  selfTestResult = test
+                  showSelfTestDialog = true
+                },
+                modifier = Modifier.fillMaxWidth()
+              ) {
+                Icon(Icons.Default.FactCheck, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Run Backup Self-Test (Verify Calibration Tables)")
+              }
+
+              OutlinedButton(
+                onClick = {
+                  val uri = BackupManager.exportAllDataExcelCsv(context, repository)
+                  if (uri != null) {
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                      type = "text/csv"
+                      putExtra(Intent.EXTRA_STREAM, uri)
+                      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    context.startActivity(Intent.createChooser(intent, "Share TankCalc Data Report"))
+                  } else {
+                    Toast.makeText(context, "Failed to export report.", Toast.LENGTH_SHORT).show()
+                  }
+                },
+                modifier = Modifier.fillMaxWidth()
+              ) {
+                Icon(Icons.Default.Description, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Export All Data to Excel / CSV")
+              }
+            }
+          }
+        }
+      }
+
       // 5. About, Version & In-App Self-Update Section
       item {
         Divider()
@@ -938,30 +1011,38 @@ fun VcfSettingsScreen(
                 haptics.trigger(com.example.engine.HapticEvent.MODE_SWITCH)
                 isCheckingUpdate = true
                 updateCheckStatusText = null
+                updateCheckIsError = false
                 scope.launch {
-                  when (val res = AppUpdateManager.checkForUpdates(context)) {
+                  val manifestUrl = settings.customUpdateManifestUrl
+                    .ifBlank { AppUpdateManager.DEFAULT_MANIFEST_URL }
+                  when (val res = AppUpdateManager.checkForUpdates(context, manifestUrl)) {
                     is UpdateCheckResult.UpdateAvailable -> {
                       isCheckingUpdate = false
                       haptics.trigger(com.example.engine.HapticEvent.SUCCESS)
                       availableUpdateResult = res
+                      updateCheckIsError = false
                       updateCheckStatusText = "Update available: v${res.manifest.versionName} (Build ${res.manifest.latestBuild})"
                     }
                     is UpdateCheckResult.UpToDate -> {
                       isCheckingUpdate = false
                       haptics.trigger(com.example.engine.HapticEvent.SUCCESS)
+                      updateCheckIsError = false
                       updateCheckStatusText = "You are on the latest version (v${res.currentVersionName}, Build ${res.currentBuild})."
                       Toast.makeText(context, "App is up to date (v${res.currentVersionName})", Toast.LENGTH_SHORT).show()
                     }
                     is UpdateCheckResult.Error -> {
                       isCheckingUpdate = false
                       haptics.trigger(com.example.engine.HapticEvent.WARNING_ALERT)
-                      updateCheckStatusText = "Update check failed: ${res.message}"
-                      Toast.makeText(context, "Update check failed: ${res.message}", Toast.LENGTH_SHORT).show()
+                      updateCheckIsError = true
+                      updateCheckStatusText = res.message
+                      Toast.makeText(context, res.message, Toast.LENGTH_LONG).show()
                     }
                   }
                 }
               },
-              modifier = Modifier.fillMaxWidth()
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("settings_check_updates_button")
             ) {
               if (isCheckingUpdate) {
                 CircularProgressIndicator(
@@ -979,17 +1060,88 @@ fun VcfSettingsScreen(
             }
 
             if (updateCheckStatusText != null) {
-              Text(
-                text = updateCheckStatusText!!,
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.primary
+              Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = if (updateCheckIsError) {
+                  MaterialTheme.colorScheme.errorContainer
+                } else {
+                  MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                },
+                modifier = Modifier.fillMaxWidth()
+              ) {
+                Text(
+                  text = updateCheckStatusText!!,
+                  style = MaterialTheme.typography.bodySmall,
+                  fontWeight = FontWeight.SemiBold,
+                  color = if (updateCheckIsError) {
+                    MaterialTheme.colorScheme.onErrorContainer
+                  } else {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                  },
+                  modifier = Modifier.padding(10.dp)
+                )
+              }
+            }
+
+            // Optional configurable Update Source URL (in case repo/branch differs)
+            TextButton(
+              onClick = { showUpdateSourceConfig = !showUpdateSourceConfig },
+              contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
+            ) {
+              Icon(
+                imageVector = if (showUpdateSourceConfig) Icons.Default.ExpandLess else Icons.Default.Link,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp)
               )
+              Spacer(modifier = Modifier.width(6.dp))
+              Text(
+                text = if (showUpdateSourceConfig) "Hide Update Source Settings" else "Configure GitHub Update Source",
+                style = MaterialTheme.typography.labelMedium
+              )
+            }
+
+            if (showUpdateSourceConfig) {
+              Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                  value = updateManifestUrlDraft,
+                  onValueChange = { updateManifestUrlDraft = it },
+                  label = { Text("GitHub Repo or version.json URL") },
+                  placeholder = { Text(AppUpdateManager.DEFAULT_MANIFEST_URL) },
+                  singleLine = true,
+                  modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                  Button(
+                    onClick = {
+                      val normalized = if (updateManifestUrlDraft.isBlank()) {
+                        ""
+                      } else {
+                        AppUpdateManager.normalizeManifestUrl(updateManifestUrlDraft)
+                      }
+                      repository.updateSettings(settings.copy(customUpdateManifestUrl = normalized))
+                      updateManifestUrlDraft = normalized
+                      Toast.makeText(context, "Update source saved.", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.weight(1f)
+                  ) {
+                    Text("Save Source")
+                  }
+                  OutlinedButton(
+                    onClick = {
+                      repository.updateSettings(settings.copy(customUpdateManifestUrl = ""))
+                      updateManifestUrlDraft = ""
+                      Toast.makeText(context, "Reset to default GitHub repo.", Toast.LENGTH_SHORT).show()
+                    }
+                  ) {
+                    Text("Reset Default")
+                  }
+                }
+              }
             }
 
             Text("Build Date: October 2026", style = MaterialTheme.typography.bodySmall)
             Divider()
-            Text("Features: Dip-to-volume engine with compact calibration, N2 water column interpolation, 30°C temperature-corrected loss reconciliation, editable chemical dosing tables, ASTM D1250-80 VCF tables, and verified full JSON backup/setup transfer.", style = MaterialTheme.typography.bodySmall)
+            Text("Features: Dip-to-volume engine with compact calibration, N2 water column interpolation, 30°C temperature-corrected loss reconciliation, editable chemical dosing tables, ASTM D1250-80 VCF tables, and verified cloud/local calibration sync.", style = MaterialTheme.typography.bodySmall)
             Text("Note: Always cross-check results with official calibration charts and standards.", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
             Text("© 2026 Meherab Hossain Jihad. All rights reserved.", style = MaterialTheme.typography.bodySmall)
             Text("Generated by Tank Calc | Developed by Meherab Hossain Jihad", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
@@ -1206,6 +1358,22 @@ fun VcfSettingsScreen(
         },
         confirmButton = {
           Button(onClick = { restoreResultDialog = null }) { Text("Done") }
+        }
+      )
+    }
+
+    // Master Password Dialog to Unhide Backup File Export Options
+    if (showUnlockBackupExportDialog) {
+      PasswordDialog(
+        title = "Master Password Required",
+        message = "Enter master password to unhide backup file export options:",
+        storedHash = settings.passwordHash,
+        onDismiss = { showUnlockBackupExportDialog = false },
+        onSuccess = {
+          showUnlockBackupExportDialog = false
+          backupExportUnlocked = true
+          haptics.trigger(com.example.engine.HapticEvent.SUCCESS)
+          Toast.makeText(context, "Backup export options unhidden.", Toast.LENGTH_SHORT).show()
         }
       )
     }

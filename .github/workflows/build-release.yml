@@ -160,4 +160,6 @@ jobs:
           body: ${{ env.CHANGELOG }}
           draft: false
           make_latest: true
-          files: app-release.apk
+          files: |
+            app-release.apk
+            version.json
