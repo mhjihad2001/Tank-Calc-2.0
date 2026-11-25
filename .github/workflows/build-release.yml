@@ -51,47 +51,76 @@ jobs:
           if [ -n "$SECRET_KEYSTORE_BASE64" ]; then
             echo "Decoding keystore from KEYSTORE_BASE64 secret..."
             echo "$SECRET_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_FILE"
-            ACTIVE_ALIAS="${SECRET_KEY_ALIAS:-app-release-key}"
-            ACTIVE_STORE_PASS="${SECRET_KEYSTORE_PASSWORD:-$DEFAULT_PASS}"
-            ACTIVE_KEY_PASS="${SECRET_KEY_PASSWORD:-$DEFAULT_PASS}"
-          elif gh release view keystore-vault >/dev/null 2>&1; then
-            echo "Downloading existing permanent keystore from hidden 'keystore-vault' draft release..."
-            gh release download keystore-vault --pattern "release-keystore.jks" --dir android/app/ --clobber
             ACTIVE_ALIAS="${SECRET_KEY_ALIAS:-$DEFAULT_ALIAS}"
             ACTIVE_STORE_PASS="${SECRET_KEYSTORE_PASSWORD:-$DEFAULT_PASS}"
             ACTIVE_KEY_PASS="${SECRET_KEY_PASSWORD:-$DEFAULT_PASS}"
           else
-            echo "First-time build: Generating permanent release keystore and storing in hidden 'keystore-vault' draft release..."
-            keytool -genkey -v \
-              -keystore "$KEYSTORE_FILE" \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -alias "$DEFAULT_ALIAS" \
-              -storepass "$DEFAULT_PASS" \
-              -keypass "$DEFAULT_PASS" \
-              -dname "CN=App, OU=Mobile, O=Dev, L=City, S=State, C=BD"
+            # Query ALL releases (including hidden drafts) via GitHub REST API.
+            # NOTE: `gh release view <tag>` can return 404 for draft releases because drafts have no published git tag.
+            # Sorting by created_at ascending locks onto the original permanent keystore forever.
+            VAULT_ASSET_ID=$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              --jq '[.[] | select(.tag_name == "keystore-vault" or .name == "Permanent Signing Keystore (Do Not Delete)") | .assets[]? | select(.name == "release-keystore.jks")] | sort_by(.created_at) | .[0].id // empty')
 
-            # Also add 'app-release-key' alias in the same keystore so both 'upload' and 'app-release-key' work seamlessly
-            keytool -genkey -v \
-              -keystore "$KEYSTORE_FILE" \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -alias "app-release-key" \
-              -storepass "$DEFAULT_PASS" \
-              -keypass "$DEFAULT_PASS" \
-              -dname "CN=App, OU=Mobile, O=Dev, L=City, S=State, C=BD"
+            if [ -n "$VAULT_ASSET_ID" ]; then
+              echo "Found existing permanent keystore asset (ID: $VAULT_ASSET_ID) in 'keystore-vault' draft release. Downloading..."
+              REDIRECT_URL=$(curl -sS -o /dev/null -w '%{redirect_url}' \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "Accept: application/octet-stream" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${VAULT_ASSET_ID}")
 
-            gh release create keystore-vault "$KEYSTORE_FILE" \
-              --draft \
-              --title "Permanent Signing Keystore (Do Not Delete)" \
-              --notes "Auto-generated permanent signing keystore. Do not delete this draft release."
+              if [ -n "$REDIRECT_URL" ]; then
+                curl -fsSL "$REDIRECT_URL" -o "$KEYSTORE_FILE"
+              else
+                gh api "repos/${GITHUB_REPOSITORY}/releases/assets/${VAULT_ASSET_ID}" \
+                  -H "Accept: application/octet-stream" > "$KEYSTORE_FILE"
+              fi
 
-            ACTIVE_ALIAS="${SECRET_KEY_ALIAS:-$DEFAULT_ALIAS}"
-            ACTIVE_STORE_PASS="${SECRET_KEYSTORE_PASSWORD:-$DEFAULT_PASS}"
-            ACTIVE_KEY_PASS="${SECRET_KEY_PASSWORD:-$DEFAULT_PASS}"
+              if [ ! -s "$KEYSTORE_FILE" ]; then
+                echo "ERROR: Downloaded keystore from keystore-vault is empty! Aborting to prevent mismatched app signature."
+                exit 1
+              fi
+
+              ACTIVE_ALIAS="${SECRET_KEY_ALIAS:-$DEFAULT_ALIAS}"
+              ACTIVE_STORE_PASS="${SECRET_KEYSTORE_PASSWORD:-$DEFAULT_PASS}"
+              ACTIVE_KEY_PASS="${SECRET_KEY_PASSWORD:-$DEFAULT_PASS}"
+            else
+              echo "First-time build: Generating permanent release keystore and storing in hidden 'keystore-vault' draft release..."
+              keytool -genkey -v \
+                -keystore "$KEYSTORE_FILE" \
+                -keyalg RSA \
+                -keysize 2048 \
+                -validity 10000 \
+                -alias "$DEFAULT_ALIAS" \
+                -storepass "$DEFAULT_PASS" \
+                -keypass "$DEFAULT_PASS" \
+                -dname "CN=App, OU=Mobile, O=Dev, L=City, S=State, C=BD"
+
+              # Also add 'app-release-key' alias in the same keystore so both 'upload' and 'app-release-key' work seamlessly
+              keytool -genkey -v \
+                -keystore "$KEYSTORE_FILE" \
+                -keyalg RSA \
+                -keysize 2048 \
+                -validity 10000 \
+                -alias "app-release-key" \
+                -storepass "$DEFAULT_PASS" \
+                -keypass "$DEFAULT_PASS" \
+                -dname "CN=App, OU=Mobile, O=Dev, L=City, S=State, C=BD"
+
+              gh release create keystore-vault "$KEYSTORE_FILE" \
+                --draft \
+                --title "Permanent Signing Keystore (Do Not Delete)" \
+                --notes "Auto-generated permanent signing keystore. Do not delete this draft release."
+
+              ACTIVE_ALIAS="${SECRET_KEY_ALIAS:-$DEFAULT_ALIAS}"
+              ACTIVE_STORE_PASS="${SECRET_KEYSTORE_PASSWORD:-$DEFAULT_PASS}"
+              ACTIVE_KEY_PASS="${SECRET_KEY_PASSWORD:-$DEFAULT_PASS}"
+            fi
           fi
+
+          # Verify keystore integrity and log signing SHA-256 fingerprint for auditability
+          echo "Verifying signing keystore certificate fingerprint (alias: $ACTIVE_ALIAS):"
+          keytool -list -v -keystore "$KEYSTORE_FILE" -alias "$ACTIVE_ALIAS" -storepass "$ACTIVE_STORE_PASS" | grep -E "Alias name:|SHA256:"
 
           # Copy to root fallback path as well
           cp "$KEYSTORE_FILE" "$GITHUB_WORKSPACE/my-upload-key.jks"
