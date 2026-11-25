@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:translateX="21"
+        android:translateY="21"
+        android:scaleX="0.064453125"
+        android:scaleY="0.064453125">
+
+        <!-- Ground -->
+        <path
+            android:fillColor="#E6FFFFFF"
+            android:pathData="M162,800 h700 a12,12 0 0 1 12,12 a12,12 0 0 1 -12,12 h-700 a12,12 0 0 1 -12,-12 a12,12 0 0 1 12,-12 z" />
+
+        <!-- Pipe racks -->
+        <path
+            android:fillColor="#14B8A6"
+            android:pathData="M347,740 h356 a7,7 0 0 1 7,7 a7,7 0 0 1 -7,7 h-356 a7,7 0 0 1 -7,-7 a7,7 0 0 1 7,-7 z" />
+        <path
+            android:fillColor="#14B8A6"
+            android:pathData="M470,410 h30 v14 h-30 z" />
+        <path
+            android:fillColor="#14B8A6"
+            android:pathData="M580,480 h120 v14 h-120 z" />
+
+        <!-- Storage Tank (Left) -->
+        <path
+            android:fillColor="#26FFFFFF"
+            android:pathData="M222,640 h96 a22,22 0 0 1 22,22 v116 a22,22 0 0 1 -22,22 h-96 a22,22 0 0 1 -22,-22 v-116 a22,22 0 0 1 22,-22 z" />
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="12"
+            android:pathData="M222,640 h96 a22,22 0 0 1 22,22 v116 a22,22 0 0 1 -22,22 h-96 a22,22 0 0 1 -22,-22 v-116 a22,22 0 0 1 22,-22 z" />
+        <path
+            android:fillColor="#0D9488"
+            android:pathData="M224,708 h92 a12,12 0 0 1 12,12 v60 a12,12 0 0 1 -12,12 h-92 a12,12 0 0 1 -12,-12 v-60 a12,12 0 0 1 12,-12 z" />
+
+        <!-- Distillation Column 1 -->
+        <path
+            android:fillColor="#3B82F6"
+            android:pathData="M425,260 a45,45 0 0 1 45,45 v450 a45,45 0 0 1 -45,45 a45,45 0 0 1 -45,-45 v-450 a45,45 0 0 1 45,-45 z" />
+        <path
+            android:strokeColor="#0F2341"
+            android:strokeWidth="8"
+            android:strokeLineCap="round"
+            android:pathData="M392,360 L458,360 M392,440 L458,440 M392,520 L458,520 M392,600 L458,600 M392,680 L458,680" />
+
+        <!-- Distillation Column 2 -->
+        <path
+            android:fillColor="#60A5FA"
+            android:pathData="M540,340 a40,40 0 0 1 40,40 v380 a40,40 0 0 1 -40,40 a40,40 0 0 1 -40,-40 v-380 a40,40 0 0 1 40,-40 z" />
+        <path
+            android:strokeColor="#0F2341"
+            android:strokeWidth="8"
+            android:strokeLineCap="round"
+            android:pathData="M512,430 L568,430 M512,510 L568,510 M512,590 L568,590 M512,670 L568,670" />
+
+        <!-- Flare Stack -->
+        <path
+            android:fillColor="#F5FFFFFF"
+            android:pathData="M709,300 a9,9 0 0 1 9,9 v482 a9,9 0 0 1 -9,9 a9,9 0 0 1 -9,-9 v-482 a9,9 0 0 1 9,-9 z" />
+
+        <!-- Flare Flame -->
+        <path
+            android:fillColor="#F59E0B"
+            android:pathData="M709,300 C676,262 696,232 709,188 C722,232 744,262 709,300 Z" />
+        <path
+            android:fillColor="#FDE68A"
+            android:pathData="M709,292 C694,274 702,258 709,238 C716,258 724,274 709,292 Z" />
+    </group>
+</vector>

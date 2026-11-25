@@ -1,0 +1,213 @@
+package com.example.ui.screens.blending
+
+import android.content.Intent
+import android.widget.Toast
+import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.TableChart
+import androidx.compose.material3.*
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.example.data.AppSettings
+import com.example.data.BlendRecord
+import com.example.data.CalculationMode
+import com.example.data.UnitType
+import com.example.engine.ExportUtils
+import com.example.engine.UnitUtils
+
+@Composable
+fun BlendReportDialog(
+  record: BlendRecord,
+  currentUnit: UnitType,
+  settings: AppSettings? = null,
+  onDismiss: () -> Unit
+) {
+  val context = LocalContext.current
+  val modeStr = if (record.mode == CalculationMode.TEMP_30C) "30 °C" else "Natural"
+  val finalVol = if (record.mode == CalculationMode.TEMP_30C && record.finalVolume30L != null) {
+    record.finalVolume30L
+  } else {
+    record.finalVolumeL
+  }
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Text("Blending Report", fontWeight = FontWeight.Bold)
+        IconButton(onClick = onDismiss) {
+          Icon(Icons.Default.Close, contentDescription = "Close")
+        }
+      }
+    },
+    text = {
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+      ) {
+        // Report Card: Contains ONLY the requested items
+        Card(
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+          modifier = Modifier.fillMaxWidth()
+        ) {
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+          ) {
+            // Header: program name, tank, date and time (and mode: Natural / 30 °C)
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+              Text(
+                text = "${record.programName} (${record.tankName})",
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+              )
+              Text(
+                text = "${record.dateTime} | Mode: $modeStr",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+              if (record.batchNumber.isNotBlank()) {
+                Text(
+                  text = "Batch No: ${record.batchNumber}",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+              }
+            }
+
+            HorizontalDivider()
+
+            // 1. Final volume of tank
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+              Text("1. Final volume of tank:", fontWeight = FontWeight.SemiBold)
+              Text(
+                text = UnitUtils.formatVolume(finalVol, currentUnit, settings = settings),
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+              )
+            }
+
+            // 2..N Component transferred amounts
+            var itemNum = 2
+            record.componentTransfers.forEach { comp ->
+              val vol = if (record.mode == CalculationMode.TEMP_30C && comp.transferred30L != null) {
+                comp.transferred30L
+              } else {
+                comp.transferredL
+              }
+              val label = if (comp.componentName.isNotBlank()) comp.componentName else comp.stageName
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+              ) {
+                Text("$itemNum. $label transferred:", fontWeight = FontWeight.SemiBold)
+                Text(
+                  text = UnitUtils.formatVolume(vol, currentUnit, settings = settings),
+                  fontWeight = FontWeight.Bold
+                )
+              }
+              itemNum++
+            }
+
+            HorizontalDivider()
+
+            // Footer: Generated by Tank Calc | Developed by Meherab Hossain Jihad
+            Text(
+              text = "Generated by Tank Calc | Developed by Meherab Hossain Jihad",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.outline
+            )
+          }
+        }
+
+        // Action Buttons Row
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          OutlinedButton(
+            onClick = {
+              val summary = ExportUtils.formatBlendSummaryText(record, currentUnit, settings)
+              ExportUtils.copyToClipboard(context, summary, "Blend Summary")
+            },
+            modifier = Modifier.weight(1f)
+          ) {
+            Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("Copy", style = MaterialTheme.typography.labelMedium)
+          }
+
+          OutlinedButton(
+            onClick = {
+              val intent = ExportUtils.exportBlendReportPdf(context, record, currentUnit, settings)
+              if (intent != null) {
+                context.startActivity(Intent.createChooser(intent, "Share Blending Report PDF"))
+              } else {
+                Toast.makeText(context, "Error generating PDF", Toast.LENGTH_SHORT).show()
+              }
+            },
+            modifier = Modifier.weight(1f)
+          ) {
+            Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("PDF", style = MaterialTheme.typography.labelMedium)
+          }
+
+          OutlinedButton(
+            onClick = {
+              val intent = ExportUtils.exportBlendReportExcel(context, record, currentUnit, settings)
+              if (intent != null) {
+                context.startActivity(Intent.createChooser(intent, "Share Blending Report Excel"))
+              } else {
+                Toast.makeText(context, "Error generating Excel/CSV", Toast.LENGTH_SHORT).show()
+              }
+            },
+            modifier = Modifier.weight(1f)
+          ) {
+            Icon(Icons.Default.TableChart, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("Excel", style = MaterialTheme.typography.labelMedium)
+          }
+        }
+
+        Button(
+          onClick = {
+            val waText = ExportUtils.formatBlendWhatsApp(record, currentUnit, settings)
+            ExportUtils.shareText(context, waText, "WhatsApp Blending Handover - ${record.programName}")
+          },
+          colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.secondary,
+            contentColor = MaterialTheme.colorScheme.onSecondary
+          ),
+          modifier = Modifier.fillMaxWidth()
+        ) {
+          Text("Quick WhatsApp / Telegram Summary", fontWeight = FontWeight.Bold)
+        }
+      }
+    },
+    confirmButton = {
+      Button(onClick = onDismiss) {
+        Text("Done")
+      }
+    }
+  )
+}

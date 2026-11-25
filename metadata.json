@@ -1,0 +1,8 @@
+{
+  "name": "Tank Calc",
+  "description": "Condensate Fractionation Refinery Process \u0026 Tank Calibration Calculator",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
