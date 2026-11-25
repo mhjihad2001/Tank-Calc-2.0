@@ -810,7 +810,7 @@ fun SplashScreen() {
       )
       Spacer(modifier = Modifier.height(48.dp))
       Text(
-        text = "Developed by Meherab Hossain Jihad\nVersion 1.0.0",
+        text = "Developed by Meherab Hossain Jihad\nVersion ${BuildConfig.VERSION_NAME}",
         style = MaterialTheme.typography.bodySmall,
         color = Color(0xFF64748B),
         textAlign = TextAlign.Center
