@@ -32,9 +32,13 @@ import com.example.ui.components.AppScreen
 import com.example.ui.components.AuthSession
 import com.example.ui.components.CloudImportDialog
 import com.example.ui.components.CloudImportMode
+import com.example.ui.components.DensityRefAndMethodSelector
 import com.example.ui.components.PasswordDialog
 import com.example.ui.components.RefineryLogo
+import com.example.ui.components.VcfVccComparisonCard
+import com.example.ui.components.VcfVccTableEditorDialog
 import com.example.ui.components.formatCloudSyncTimestamp
+import com.example.ui.components.shortLabel
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -55,10 +59,12 @@ fun VcfSettingsScreen(
   val context = LocalContext.current
   val settings by repository.settings.collectAsState()
   val tanks by repository.tanks.collectAsState()
+  val prodSetup by repository.productionReportSetup.collectAsState()
 
   var densityInput by remember { mutableStateOf("750.0") }
   var tempInput by remember { mutableStateOf("25.0") }
   var observedVolInput by remember { mutableStateOf("10000.0") }
+  var showTableEditor by remember { mutableStateOf(false) }
 
   var showChangePasswordDialog by remember { mutableStateOf(false) }
   var showAuthForPassword by remember { mutableStateOf(false) }
@@ -122,20 +128,25 @@ fun VcfSettingsScreen(
     }
   }
 
-  val rho15 = densityInput.toDoubleOrNull() ?: 750.0
+  val inputDensity = densityInput.toDoubleOrNull() ?: 750.0
   val temp = tempInput.toDoubleOrNull() ?: 25.0
   val obsVol = observedVolInput.toDoubleOrNull() ?: 10000.0
 
-  val vcfRes = remember(rho15, temp, settings) {
-    VcfEngine.calculateVcf(rho15, temp, settings.vcfTableType, settings.roundVcfTo4Decimals, settings.roundTempTo025)
+  val dualRes = remember(inputDensity, temp, obsVol, settings, prodSetup) {
+    VcfEngine.calculateDual30C(
+      observedVolume = obsVol,
+      observedTemp = temp,
+      inputDensity = inputDensity,
+      densityRefTemp = settings.densityInputRefTemp,
+      tableType = settings.vcfTableType,
+      round4 = settings.roundVcfTo4Decimals,
+      roundTemp025 = settings.roundTempTo025,
+      vccTable = prodSetup.vccTable,
+      vcf30Table = prodSetup.vcf30Table,
+      customBands = settings.customVcfBandParams,
+      preferredMethod = settings.tempCorrectionMethod
+    )
   }
-
-  val vcf30Res = remember(rho15, settings) {
-    VcfEngine.calculateVcf(rho15, 30.0, settings.vcfTableType, settings.roundVcfTo4Decimals, settings.roundTempTo025)
-  }
-
-  val vol15 = obsVol * vcfRes.vcf
-  val vol30 = if (vcf30Res.vcf > 0) obsVol * vcfRes.vcf / vcf30Res.vcf else 0.0
 
   val daysSinceLastBackup = if (settings.lastBackupTimestamp > 0L) {
     (System.currentTimeMillis() - settings.lastBackupTimestamp) / (1000 * 60 * 60 * 24)
@@ -147,7 +158,7 @@ fun VcfSettingsScreen(
   val showVcfCalc = sectionMode != SettingsSectionMode.SETTINGS_AND_BACKUP
 
   AppScreen(
-    title = if (sectionMode == SettingsSectionMode.VCF_CALCULATOR_ONLY) "ASTM D1250-80 VCF" else "App Settings",
+    title = if (sectionMode == SettingsSectionMode.VCF_CALCULATOR_ONLY) "VCF & VCC Calculator" else "App Settings",
     onBack = onBack,
     actions = {
       if (sectionMode == SettingsSectionMode.VCF_CALCULATOR_ONLY) {
@@ -547,15 +558,29 @@ fun VcfSettingsScreen(
       }
       } // end showSettings (Units, Diagnostics, Backup)
 
-      // 3. ASTM VCF Calculator Section
+      // 3. Dual ASTM VCF & VCC Calculator Section
       if (showVcfCalc) {
       item {
         if (showSettings) Divider()
-        Text("ASTM D1250-80 Standalone VCF Calculator", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+        Text("Dual VCF & VCC Calculator (@30 °C)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
       }
 
       item {
-        Text("Select Table Standard", style = MaterialTheme.typography.titleSmall)
+        DensityRefAndMethodSelector(
+          densityRefTemp = settings.densityInputRefTemp,
+          onDensityRefTempChange = { ref ->
+            repository.updateSettings(settings.copy(densityInputRefTemp = ref))
+          },
+          activeMethod = settings.tempCorrectionMethod,
+          onMethodChange = { method ->
+            repository.updateSettings(settings.copy(tempCorrectionMethod = method))
+          },
+          onOpenTableEditor = { showTableEditor = true }
+        )
+      }
+
+      item {
+        Text("ASTM Table Standard", style = MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
           VcfTableType.values().forEach { table ->
             FilterChip(
@@ -574,16 +599,18 @@ fun VcfSettingsScreen(
           OutlinedTextField(
             value = densityInput,
             onValueChange = { densityInput = it },
-            label = { Text("Density @15°C (kg/m³)") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.weight(1f)
+            label = { Text("Density ${settings.densityInputRefTemp.shortLabel()} (kg/m³ or kg/L)") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            singleLine = true,
+            modifier = Modifier.weight(1.25f)
           )
           OutlinedTextField(
             value = tempInput,
             onValueChange = { tempInput = it },
             label = { Text("Obs. Temp (°C)") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.weight(1f)
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            singleLine = true,
+            modifier = Modifier.weight(0.95f)
           )
         }
       }
@@ -593,33 +620,39 @@ fun VcfSettingsScreen(
           value = observedVolInput,
           onValueChange = { observedVolInput = it },
           label = { Text("Observed Volume (Natural L)") },
-          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+          singleLine = true,
           modifier = Modifier.fillMaxWidth()
         )
       }
 
       item {
+        VcfVccComparisonCard(
+          result = dualRes,
+          settings = settings,
+          onSelectMethod = { method ->
+            repository.updateSettings(settings.copy(tempCorrectionMethod = method))
+          },
+          onOpenTableEditor = { showTableEditor = true },
+          title = "VCF vs VCC Results & Deviation (@30 °C)"
+        )
+      }
+
+      item {
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-          Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("VCF Calculation Results", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-            Divider()
-            if (vcfRes.warning != null) {
-              Text(vcfRes.warning!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-            }
-            Text("Density Band: ${vcfRes.bandName}")
-            Text("Thermal Expansion Coefficient (α15): ${String.format("%.8f", vcfRes.alpha15)}")
-            Text("Temperature Difference (dT): ${vcfRes.dT} °C")
+          Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("ASTM D1250-80 Engineering Details", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            HorizontalDivider()
+            Text("Density Band: ${dualRes.vcfObserved.bandName}", style = MaterialTheme.typography.bodySmall)
+            Text("Thermal Expansion (α15): ${String.format(Locale.US, "%.8f", dualRes.vcfObserved.alpha15)} /°C", style = MaterialTheme.typography.bodySmall)
+            Text("Temperature Diff (ΔT vs 15°C): ${dualRes.vcfObserved.dT} °C  •  (ΔT vs 30°C): ${String.format(Locale.US, "%.2f", temp - 30.0)} °C", style = MaterialTheme.typography.bodySmall)
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-              Text("Calculated VCF (t -> 15°C):", fontWeight = FontWeight.Bold)
-              Text("${vcfRes.vcf}", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-            }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-              Text("Volume @15 °C:")
-              Text("${UnitUtils.formatVolume(vol15, settings.unit, settings = settings)}", fontWeight = FontWeight.SemiBold)
-            }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-              Text("Volume @30 °C:")
-              Text("${UnitUtils.formatVolume(vol30, settings.unit, settings = settings)}", fontWeight = FontWeight.SemiBold)
+              Text("Active Method (${dualRes.selectedMethod.shortLabel()}):", fontWeight = FontWeight.Bold)
+              Text(
+                UnitUtils.formatVolume(dualRes.selectedVolume30, settings.unit, settings = settings),
+                fontWeight = FontWeight.ExtraBold,
+                color = MaterialTheme.colorScheme.primary
+              )
             }
           }
         }
@@ -657,6 +690,22 @@ fun VcfSettingsScreen(
       }
 
       if (showSettings) {
+
+      item {
+        OutlinedButton(
+          onClick = {
+            haptics.trigger(HapticEvent.MODE_SWITCH)
+            showTableEditor = true
+          },
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("settings_edit_vcf_vcc_tables_button")
+        ) {
+          Icon(Icons.Default.TableChart, contentDescription = null)
+          Spacer(modifier = Modifier.width(8.dp))
+          Text("Edit VCC, VCF30 & ASTM K0/K1 Data Tables")
+        }
+      }
 
       item {
         OutlinedTextField(
@@ -1526,6 +1575,13 @@ fun VcfSettingsScreen(
         dismissButton = {
           TextButton(onClick = { showDiagnosticsDialog = false }) { Text("Close") }
         }
+      )
+    }
+
+    if (showTableEditor) {
+      VcfVccTableEditorDialog(
+        repository = repository,
+        onDismiss = { showTableEditor = false }
       )
     }
   }

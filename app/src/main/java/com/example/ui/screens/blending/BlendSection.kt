@@ -29,7 +29,11 @@ import com.example.engine.ExportUtils
 import com.example.engine.UnitUtils
 import com.example.engine.VcfEngine
 import com.example.ui.components.AuthSession
+import com.example.ui.components.DensityRefAndMethodSelector
 import com.example.ui.components.PasswordDialog
+import com.example.ui.components.VcfVccComparisonCard
+import com.example.ui.components.VcfVccTableEditorDialog
+import com.example.ui.components.shortLabel
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.abs
@@ -67,10 +71,12 @@ fun BlendSection(
   val rawTanks by repository.tanks.collectAsState()
   val tanks = remember(rawTanks) { rawTanks.filter { it.type != TankType.N2_STORAGE } }
   val settings by repository.settings.collectAsState()
+  val prodSetup by repository.productionReportSetup.collectAsState()
   val programs by repository.blendPrograms.collectAsState()
   val blendRecords by repository.blendRecords.collectAsState()
   val editLogs by repository.editLogs.collectAsState()
   val haptics = com.example.engine.rememberHapticController()
+  var showTableEditor by remember { mutableStateOf(false) }
 
   // Selected program
   var selectedProgramId by remember(programs) {
@@ -159,12 +165,23 @@ fun BlendSection(
       dipRes?.totalVolume ?: 0.0
     }
 
-    // 30°C correction
-    val rho = sState.densityStr.toDoubleOrNull() ?: 750.0
+    // 30°C dual correction (VCF ASTM + VCC Table + VCF30 Table)
+    val rhoInput = sState.densityStr.toDoubleOrNull() ?: 750.0
     val temp = sState.tempStr.toDoubleOrNull() ?: 25.0
-    val vcfNat = VcfEngine.calculateVcf(rho, temp, settings.vcfTableType, settings.roundVcfTo4Decimals, settings.roundTempTo025)
-    val vcf30 = VcfEngine.calculateVcf(rho, 30.0, settings.vcfTableType, settings.roundVcfTo4Decimals, settings.roundTempTo025)
-    val vol30L = if (vcf30.vcf > 0) naturalVolumeL * vcfNat.vcf / vcf30.vcf else naturalVolumeL
+    val dualRes = VcfEngine.calculateDual30C(
+      observedVolume = naturalVolumeL,
+      observedTemp = temp,
+      inputDensity = rhoInput,
+      densityRefTemp = settings.densityInputRefTemp,
+      tableType = settings.vcfTableType,
+      round4 = settings.roundVcfTo4Decimals,
+      roundTemp025 = settings.roundTempTo025,
+      vccTable = prodSetup.vccTable,
+      vcf30Table = prodSetup.vcf30Table,
+      customBands = settings.customVcfBandParams,
+      preferredMethod = settings.tempCorrectionMethod
+    )
+    val vol30L = dualRes.selectedVolume30
 
     val effectiveVolL = if (calcMode == CalculationMode.TEMP_30C) vol30L else naturalVolumeL
 
@@ -174,8 +191,10 @@ fun BlendSection(
       val effectiveVol = effectiveVolL
       val warning = dipRes?.warning
       val isOutOfRange = dipRes?.warning?.contains("Extrapolating", ignoreCase = true) == true
-      val vcfNatVal = vcfNat.vcf
-      val vcf30Val = vcf30.vcf
+      val vcfNatVal = dualRes.vcfObserved.vcf
+      val vcf30Val = dualRes.vcfAt30.vcf
+      val rho15KgM3 = dualRes.rho15KgM3
+      val dual = dualRes
     }
   }
 
@@ -373,6 +392,20 @@ fun BlendSection(
             }
           }
 
+          if (calcMode == CalculationMode.TEMP_30C) {
+            DensityRefAndMethodSelector(
+              densityRefTemp = settings.densityInputRefTemp,
+              onDensityRefTempChange = { ref ->
+                repository.updateSettings(settings.copy(densityInputRefTemp = ref))
+              },
+              activeMethod = settings.tempCorrectionMethod,
+              onMethodChange = { method ->
+                repository.updateSettings(settings.copy(tempCorrectionMethod = method))
+              },
+              onOpenTableEditor = { showTableEditor = true }
+            )
+          }
+
           Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -552,15 +585,17 @@ fun BlendSection(
               OutlinedTextField(
                 value = stageState.densityStr,
                 onValueChange = { stageState.densityStr = it },
-                label = { Text("Density @15°C (kg/m³)") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                label = { Text("Density ${settings.densityInputRefTemp.shortLabel()} (kg/m³)") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                singleLine = true,
                 modifier = Modifier.weight(1f)
               )
               OutlinedTextField(
                 value = stageState.tempStr,
                 onValueChange = { stageState.tempStr = it },
                 label = { Text("Temp (°C)") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                singleLine = true,
                 modifier = Modifier.weight(1f)
               )
             }
@@ -580,9 +615,9 @@ fun BlendSection(
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.primary
               )
-              if (calcMode == CalculationMode.TEMP_30C) {
+              if (calcMode == CalculationMode.TEMP_30C && eval != null) {
                 Text(
-                  text = "Natural: ${UnitUtils.formatVolume(eval?.naturalVol ?: 0.0, settings.unit, settings = settings)} | VCF(t): ${eval?.vcfNatVal ?: 1.0} | VCF(30): ${eval?.vcf30Val ?: 1.0}",
+                  text = "Nat: ${UnitUtils.formatVolume(eval.naturalVol, settings.unit, settings = settings)} | VCF: ${UnitUtils.formatVolume(eval.dual.volume30Vcf, settings.unit, settings = settings)} | VCC: ${UnitUtils.formatVolume(eval.dual.volume30Vcc, settings.unit, settings = settings)}",
                   style = MaterialTheme.typography.bodySmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -714,6 +749,23 @@ fun BlendSection(
       }
     }
 
+    if (calcMode == CalculationMode.TEMP_30C) {
+      val finalDual = stageEvaluations.lastOrNull()?.dual
+      if (finalDual != null) {
+        item {
+          VcfVccComparisonCard(
+            result = finalDual,
+            settings = settings,
+            onSelectMethod = { method ->
+              repository.updateSettings(settings.copy(tempCorrectionMethod = method))
+            },
+            onOpenTableEditor = { showTableEditor = true },
+            title = "Final Stage VCF vs VCC Comparison (@30 °C)"
+          )
+        }
+      }
+    }
+
     // 6. Action Buttons: Save & View Report
     item {
       Row(
@@ -738,7 +790,7 @@ fun BlendSection(
                 dipMm = s.dipStr.toDoubleOrNull() ?: 0.0,
                 volumeNaturalL = eval?.naturalVol ?: 0.0,
                 dateTime = s.dateTimeStr.ifBlank { now },
-                density15 = if (calcMode == CalculationMode.TEMP_30C) s.densityStr.toDoubleOrNull() else null,
+                density15 = if (calcMode == CalculationMode.TEMP_30C) eval?.rho15KgM3 else null,
                 temp = if (calcMode == CalculationMode.TEMP_30C) s.tempStr.toDoubleOrNull() else null,
                 vcfNatural = if (calcMode == CalculationMode.TEMP_30C) eval?.vcfNatVal else null,
                 vcf30 = if (calcMode == CalculationMode.TEMP_30C) eval?.vcf30Val else null,
@@ -787,7 +839,7 @@ fun BlendSection(
                 dipMm = s.dipStr.toDoubleOrNull() ?: 0.0,
                 volumeNaturalL = eval?.naturalVol ?: 0.0,
                 dateTime = s.dateTimeStr.ifBlank { now },
-                density15 = if (calcMode == CalculationMode.TEMP_30C) s.densityStr.toDoubleOrNull() else null,
+                density15 = if (calcMode == CalculationMode.TEMP_30C) eval?.rho15KgM3 else null,
                 temp = if (calcMode == CalculationMode.TEMP_30C) s.tempStr.toDoubleOrNull() else null,
                 vcfNatural = if (calcMode == CalculationMode.TEMP_30C) eval?.vcfNatVal else null,
                 vcf30 = if (calcMode == CalculationMode.TEMP_30C) eval?.vcf30Val else null,
@@ -926,6 +978,13 @@ fun BlendSection(
         pendingAuthAction?.invoke()
         pendingAuthAction = null
       }
+    )
+  }
+
+  if (showTableEditor) {
+    VcfVccTableEditorDialog(
+      repository = repository,
+      onDismiss = { showTableEditor = false }
     )
   }
 }

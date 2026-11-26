@@ -213,6 +213,19 @@ data class TankReadingLogEntry(
 
 enum class UnitType { LITRES, M3, BBL }
 enum class VcfTableType { TABLE_54A, TABLE_54B, TABLE_54D }
+enum class DensityRefTemp { AT_15C, AT_30C }
+enum class TempCorrectionMethod { VCF_ASTM, VCC_TABLE, VCF30_TABLE }
+
+data class VcfBandParam(
+  val id: String,
+  val tableType: VcfTableType,
+  val bandName: String,
+  val minDensity15: Double,
+  val maxDensity15: Double,
+  val k0: Double,
+  val k1: Double,
+  val k2Offset: Double = 0.0
+)
 
 data class AppSettings(
   val unit: UnitType = UnitType.LITRES,
@@ -243,7 +256,10 @@ data class AppSettings(
   val hapticsEnabled: Boolean = true,
   val hapticIntensity: Int = 2, // 1 = Light, 2 = Medium (Industrial), 3 = Strong (Field Glove)
   val useInAppKeyboard: Boolean = true,
-  val customUpdateManifestUrl: String = ""
+  val customUpdateManifestUrl: String = "",
+  val densityInputRefTemp: DensityRefTemp = DensityRefTemp.AT_15C,
+  val tempCorrectionMethod: TempCorrectionMethod = TempCorrectionMethod.VCF_ASTM,
+  val customVcfBandParams: List<VcfBandParam> = emptyList()
 )
 
 data class BlendStage(

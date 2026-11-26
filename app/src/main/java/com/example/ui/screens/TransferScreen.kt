@@ -22,9 +22,13 @@ import com.example.engine.UnitQuickSwitchChip
 import com.example.engine.UnitUtils
 import com.example.engine.VcfEngine
 import com.example.ui.components.AppScreen
+import com.example.ui.components.DensityRefAndMethodSelector
 import com.example.ui.components.NumberInput
 import com.example.ui.components.ProductBadge
 import com.example.ui.components.TankPickerSheet
+import com.example.ui.components.VcfVccComparisonCard
+import com.example.ui.components.VcfVccTableEditorDialog
+import com.example.ui.components.shortLabel
 import com.example.ui.screens.blending.BlendSection
 import kotlinx.coroutines.delay
 import org.json.JSONObject
@@ -44,6 +48,7 @@ fun TransferScreen(
   val products by repository.products.collectAsState()
   val transactions by repository.transactions.collectAsState()
   val settings by repository.settings.collectAsState()
+  val prodSetup by repository.productionReportSetup.collectAsState()
   val haptics = com.example.engine.rememberHapticController()
 
   var selectedTankName by remember(tanks) { mutableStateOf(tanks.firstOrNull()?.name ?: "") }
@@ -62,6 +67,7 @@ fun TransferScreen(
   var draftSavedIndicator by remember { mutableStateOf(false) }
   var showClearConfirm by remember { mutableStateOf(false) }
   var showOverflowMenu by remember { mutableStateOf(false) }
+  var showTableEditor by remember { mutableStateOf(false) }
 
   LaunchedEffect(requestedTxType) {
     if (requestedTxType != null) {
@@ -122,15 +128,29 @@ fun TransferScreen(
   val finalVol = finalRes?.totalVolume ?: 0.0
   val naturalQty = kotlin.math.abs(finalVol - initVol)
 
-  val rho15 = densityStr.toDoubleOrNull() ?: 750.0
+  val inputDensity = densityStr.toDoubleOrNull() ?: 750.0
   val tInit = initTempStr.toDoubleOrNull() ?: 25.0
   val tFinal = finalTempStr.toDoubleOrNull() ?: 28.0
+  val avgTemp = (tInit + tFinal) / 2.0
 
-  val vcfNatRes = VcfEngine.calculateVcf(rho15, (tInit + tFinal) / 2.0, settings.vcfTableType, settings.roundVcfTo4Decimals, settings.roundTempTo025)
-  val vcf30Res = VcfEngine.calculateVcf(rho15, 30.0, settings.vcfTableType, settings.roundVcfTo4Decimals, settings.roundTempTo025)
+  val dualRes = remember(naturalQty, avgTemp, inputDensity, settings, prodSetup) {
+    VcfEngine.calculateDual30C(
+      observedVolume = naturalQty,
+      observedTemp = avgTemp,
+      inputDensity = inputDensity,
+      densityRefTemp = settings.densityInputRefTemp,
+      tableType = settings.vcfTableType,
+      round4 = settings.roundVcfTo4Decimals,
+      roundTemp025 = settings.roundTempTo025,
+      vccTable = prodSetup.vccTable,
+      vcf30Table = prodSetup.vcf30Table,
+      customBands = settings.customVcfBandParams,
+      preferredMethod = settings.tempCorrectionMethod
+    )
+  }
 
-  val vol15 = if (calcMode == CalculationMode.TEMP_30C) naturalQty * vcfNatRes.vcf else 0.0
-  val vol30 = if (calcMode == CalculationMode.TEMP_30C && vcf30Res.vcf > 0) naturalQty * vcfNatRes.vcf / vcf30Res.vcf else 0.0
+  val vol15 = if (calcMode == CalculationMode.TEMP_30C) dualRes.volume15Vcf else 0.0
+  val vol30 = if (calcMode == CalculationMode.TEMP_30C) dualRes.selectedVolume30 else 0.0
 
   AppScreen(
     title = if (txType == TransactionType.BLEND) "Product Blending" else "Tank Transfer",
@@ -331,11 +351,22 @@ fun TransferScreen(
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
               Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("Temperature & Density Correction Inputs", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                DensityRefAndMethodSelector(
+                  densityRefTemp = settings.densityInputRefTemp,
+                  onDensityRefTempChange = { ref ->
+                    repository.updateSettings(settings.copy(densityInputRefTemp = ref))
+                  },
+                  activeMethod = settings.tempCorrectionMethod,
+                  onMethodChange = { method ->
+                    repository.updateSettings(settings.copy(tempCorrectionMethod = method))
+                  },
+                  onOpenTableEditor = { showTableEditor = true }
+                )
                 NumberInput(
                   value = densityStr,
                   onValueChange = { densityStr = it },
-                  label = "Density @15 °C",
-                  suffix = "kg/m³",
+                  label = "Density ${settings.densityInputRefTemp.shortLabel()}",
+                  suffix = "kg/m³ | kg/L",
                   modifier = Modifier.fillMaxWidth()
                 )
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -379,9 +410,7 @@ fun TransferScreen(
 
               if (calcMode == CalculationMode.TEMP_30C) {
                 Divider()
-                Text("VCF Engine Breakdown:", fontWeight = FontWeight.SemiBold)
-                Text("VCF Natural: ${vcfNatRes.vcf} (${vcfNatRes.bandName})")
-                Text("VCF @30 °C: ${vcf30Res.vcf}")
+                Text("Active Method: ${dualRes.selectedMethod.shortLabel()}", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                   Text("Transferred Volume @15 °C:", fontWeight = FontWeight.Bold)
                   Text(UnitUtils.formatVolume(vol15, settings.unit, settings = settings), fontWeight = FontWeight.Bold)
@@ -392,6 +421,20 @@ fun TransferScreen(
                 }
               }
             }
+          }
+        }
+
+        if (calcMode == CalculationMode.TEMP_30C) {
+          item {
+            VcfVccComparisonCard(
+              result = dualRes,
+              settings = settings,
+              onSelectMethod = { method ->
+                repository.updateSettings(settings.copy(tempCorrectionMethod = method))
+              },
+              onOpenTableEditor = { showTableEditor = true },
+              title = "Transfer VCF vs VCC Comparison (@30 °C)"
+            )
           }
         }
 
@@ -410,11 +453,11 @@ fun TransferScreen(
                 finalVolume = finalVol,
                 quantity = naturalQty,
                 mode = calcMode,
-                density15 = if (calcMode == CalculationMode.TEMP_30C) rho15 else null,
+                density15 = if (calcMode == CalculationMode.TEMP_30C) dualRes.rho15KgM3 else null,
                 initialTemp = if (calcMode == CalculationMode.TEMP_30C) tInit else null,
                 finalTemp = if (calcMode == CalculationMode.TEMP_30C) tFinal else null,
-                vcfNatural = if (calcMode == CalculationMode.TEMP_30C) vcfNatRes.vcf else null,
-                vcf30 = if (calcMode == CalculationMode.TEMP_30C) vcf30Res.vcf else null,
+                vcfNatural = if (calcMode == CalculationMode.TEMP_30C) dualRes.vcfObserved.vcf else null,
+                vcf30 = if (calcMode == CalculationMode.TEMP_30C) dualRes.vcfAt30.vcf else null,
                 volume15 = if (calcMode == CalculationMode.TEMP_30C) vol15 else null,
                 volume30 = if (calcMode == CalculationMode.TEMP_30C) vol30 else null
               )
@@ -465,6 +508,13 @@ fun TransferScreen(
             Text("Cancel")
           }
         }
+      )
+    }
+
+    if (showTableEditor) {
+      VcfVccTableEditorDialog(
+        repository = repository,
+        onDismiss = { showTableEditor = false }
       )
     }
   }

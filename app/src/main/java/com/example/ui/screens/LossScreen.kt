@@ -28,10 +28,15 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.data.*
 import com.example.engine.*
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.text.font.FontFamily
 import com.example.ui.components.AppScreen
+import com.example.ui.components.DensityRefAndMethodSelector
 import com.example.ui.components.ProductBadge
 import com.example.ui.components.TankPickerSheet
+import com.example.ui.components.VcfVccTableEditorDialog
 import com.example.ui.components.parseHexColor
+import com.example.ui.components.shortLabel
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -45,9 +50,11 @@ fun LossScreen(repository: TankRepository) {
   val tanks by repository.tanks.collectAsState()
   val products by repository.products.collectAsState()
   val settings by repository.settings.collectAsState()
+  val prodSetup by repository.productionReportSetup.collectAsState()
   val savedReports by repository.lossReports.collectAsState()
   val blendRecords by repository.blendRecords.collectAsState()
   val blendPrograms by repository.blendPrograms.collectAsState()
+  var showTableEditor by remember { mutableStateOf(false) }
 
   // Mode: Natural vs 30°C
   var mode by remember { mutableStateOf(CalculationMode.NORMAL) }
@@ -272,7 +279,7 @@ fun LossScreen(repository: TankRepository) {
   // Pure Calculation Engine call
   val computationResult = remember(
     mode, startTimeStr, endTimeStr, durationHours,
-    feedCalcInputs, prodCalcInputs, products, settings
+    feedCalcInputs, prodCalcInputs, products, settings, prodSetup
   ) {
     LossEngine.computeLoss(
       LossComputationInput(
@@ -286,7 +293,12 @@ fun LossScreen(repository: TankRepository) {
         vcfTableType = settings.vcfTableType,
         roundVcfTo4Decimals = settings.roundVcfTo4Decimals,
         roundTempTo025 = settings.roundTempTo025,
-        lossThresholdPercent = settings.lossThresholdPercent
+        lossThresholdPercent = settings.lossThresholdPercent,
+        densityRefTemp = settings.densityInputRefTemp,
+        correctionMethod = settings.tempCorrectionMethod,
+        vccTable = prodSetup.vccTable,
+        vcf30Table = prodSetup.vcf30Table,
+        customVcfBandParams = settings.customVcfBandParams
       )
     )
   }
@@ -411,7 +423,7 @@ fun LossScreen(repository: TankRepository) {
               color = MaterialTheme.colorScheme.primary
             )
             Text(
-              if (mode == CalculationMode.TEMP_30C) "Standard (30 °C, ASTM D1250-80)" else "Natural (Ambient)",
+              if (mode == CalculationMode.TEMP_30C) "30 °C (${settings.tempCorrectionMethod.shortLabel()})" else "Natural (Ambient)",
               style = MaterialTheme.typography.labelSmall,
               fontWeight = FontWeight.SemiBold,
               color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -625,11 +637,11 @@ fun LossScreen(repository: TankRepository) {
         // Section 1: Mode Toggle
         item {
           Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-            Row(
+            Column(
               modifier = Modifier
                 .fillMaxWidth()
                 .padding(8.dp),
-              horizontalArrangement = Arrangement.Center
+              verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
               SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                 SegmentedButton(
@@ -646,6 +658,20 @@ fun LossScreen(repository: TankRepository) {
                 ) {
                   Text("30 °C Mode")
                 }
+              }
+
+              if (mode == CalculationMode.TEMP_30C) {
+                DensityRefAndMethodSelector(
+                  densityRefTemp = settings.densityInputRefTemp,
+                  onDensityRefTempChange = { ref ->
+                    repository.updateSettings(settings.copy(densityInputRefTemp = ref))
+                  },
+                  activeMethod = settings.tempCorrectionMethod,
+                  onMethodChange = { method ->
+                    repository.updateSettings(settings.copy(tempCorrectionMethod = method))
+                  },
+                  onOpenTableEditor = { showTableEditor = true }
+                )
               }
             }
           }
@@ -828,7 +854,7 @@ fun LossScreen(repository: TankRepository) {
                 // 30°C mode fields
                 if (mode == CalculationMode.TEMP_30C) {
                   HorizontalDivider()
-                  Text("Temperature & Density (@15°C)", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                  Text("Temperature & Density (${settings.densityInputRefTemp.shortLabel()})", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                   Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                       value = density,
@@ -837,8 +863,9 @@ fun LossScreen(repository: TankRepository) {
                         tankInputs.value = tankInputs.value.toMutableMap().apply { put(tank.name, updated) }
                         newVal.toDoubleOrNull()?.let { repository.setTankDensity(tank.name, it) }
                       },
-                      label = { Text("Density @15°C") },
-                      keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                      label = { Text("Density ${settings.densityInputRefTemp.shortLabel()}") },
+                      keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                      singleLine = true,
                       modifier = Modifier.weight(1f)
                     )
                     OutlinedTextField(
@@ -1139,7 +1166,7 @@ fun LossScreen(repository: TankRepository) {
                   // 30°C mode fields
                   if (mode == CalculationMode.TEMP_30C) {
                     HorizontalDivider()
-                    Text("Temperature & Density (@15°C)", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    Text("Temperature & Density (${settings.densityInputRefTemp.shortLabel()})", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                       OutlinedTextField(
                         value = density,
@@ -1148,8 +1175,9 @@ fun LossScreen(repository: TankRepository) {
                           tankInputs.value = tankInputs.value.toMutableMap().apply { put(tank.name, updated) }
                           newVal.toDoubleOrNull()?.let { repository.setTankDensity(tank.name, it) }
                         },
-                        label = { Text("Density @15°C") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        label = { Text("Density ${settings.densityInputRefTemp.shortLabel()}") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
                         modifier = Modifier.weight(1f)
                       )
                       OutlinedTextField(
@@ -1194,6 +1222,124 @@ fun LossScreen(repository: TankRepository) {
             unit = settings.unit,
             settings = settings
           )
+        }
+
+        // Section 7B: Dual VCF vs VCC Loss Deviation Comparison Card (30°C Mode)
+        if (mode == CalculationMode.TEMP_30C && computationResult.dualComparison != null) {
+          val cmp = computationResult.dualComparison
+          item {
+            Card(
+              colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+              modifier = Modifier.fillMaxWidth()
+            ) {
+              Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Text(
+                    "Process Loss: VCF vs VCC Deviation",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.primary
+                  )
+                  TextButton(
+                    onClick = { showTableEditor = true },
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                  ) {
+                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Edit Tables", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                  }
+                }
+
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                  listOf(
+                    Triple(TempCorrectionMethod.VCF_ASTM, cmp.vcfLoss, cmp.vcfLossPercent),
+                    Triple(TempCorrectionMethod.VCC_TABLE, cmp.vccLoss, cmp.vccLossPercent),
+                    Triple(TempCorrectionMethod.VCF30_TABLE, cmp.vcf30Loss, cmp.vcf30LossPercent)
+                  ).forEach { (m, lVol, lPct) ->
+                    val isSel = settings.tempCorrectionMethod == m
+                    Surface(
+                      shape = RoundedCornerShape(10.dp),
+                      color = if (isSel) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                      border = BorderStroke(
+                        if (isSel) 2.dp else 1.dp,
+                        if (isSel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                      ),
+                      modifier = Modifier
+                        .weight(1f)
+                        .clickable {
+                          repository.updateSettings(settings.copy(tempCorrectionMethod = m))
+                        }
+                    ) {
+                      Column(
+                        modifier = Modifier.padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                      ) {
+                        Text(
+                          text = m.shortLabel(),
+                          style = MaterialTheme.typography.labelSmall,
+                          fontWeight = FontWeight.ExtraBold,
+                          color = if (isSel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                          text = UnitUtils.formatVolume(abs(lVol), settings.unit, settings = settings),
+                          style = MaterialTheme.typography.labelMedium,
+                          fontFamily = FontFamily.Monospace,
+                          fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                          text = "${String.format(Locale.US, "%.3f", lPct)}%",
+                          style = MaterialTheme.typography.labelSmall,
+                          fontFamily = FontFamily.Monospace,
+                          color = if (lVol < 0) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error
+                        )
+                      }
+                    }
+                  }
+                }
+
+                val devPctAbs = abs(cmp.lossDeviationPercentPoints)
+                val devColor = if (devPctAbs <= 0.05) Color(0xFF0F766E) else if (devPctAbs <= 0.20) Color(0xFFB45309) else MaterialTheme.colorScheme.error
+                Surface(
+                  shape = RoundedCornerShape(8.dp),
+                  color = devColor.copy(alpha = 0.12f),
+                  border = BorderStroke(1.dp, devColor.copy(alpha = 0.45f)),
+                  modifier = Modifier.fillMaxWidth()
+                ) {
+                  Row(
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .padding(horizontal = 10.dp, vertical = 7.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    Text(
+                      "Δ Loss (VCF − VCC):",
+                      style = MaterialTheme.typography.labelMedium,
+                      fontWeight = FontWeight.Bold,
+                      color = devColor
+                    )
+                    Text(
+                      "${if (cmp.lossDeviationVcfVsVccL >= 0) "+" else "-"}${UnitUtils.formatVolume(abs(cmp.lossDeviationVcfVsVccL), settings.unit, settings = settings)} (${String.format(Locale.US, "%+.4f", cmp.lossDeviationPercentPoints)}%)",
+                      style = MaterialTheme.typography.labelMedium,
+                      fontFamily = FontFamily.Monospace,
+                      fontWeight = FontWeight.ExtraBold,
+                      color = devColor
+                    )
+                  }
+                }
+              }
+            }
+          }
         }
 
         // Section 8: Product Tank Ratios (share of total product)
@@ -1549,6 +1695,13 @@ fun LossScreen(repository: TankRepository) {
           }
         }
       }
+    }
+
+    if (showTableEditor) {
+      VcfVccTableEditorDialog(
+        repository = repository,
+        onDismiss = { showTableEditor = false }
+      )
     }
   }
 }

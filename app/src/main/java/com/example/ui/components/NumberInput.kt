@@ -73,18 +73,11 @@ fun NumberInput(
         }
     }
 
-    // Keep global in-app keyboard session synced if value changes externally
-    LaunchedEffect(value, isFocused) {
+    // Keep global in-app keyboard field metadata synced without clobbering user's tapped cursor
+    LaunchedEffect(label, suffix, isFocused) {
         if (isFocused) {
             inAppKbController?.activeFieldLabel = label
             inAppKbController?.activeFieldUnit = suffix
-            val session = inAppKbController?.activeSession
-            if (session != null && session.currentFieldValue.text != value) {
-                session.currentFieldValue = androidx.compose.ui.text.input.TextFieldValue(
-                    text = value,
-                    selection = androidx.compose.ui.text.TextRange(value.length)
-                )
-            }
         }
     }
 

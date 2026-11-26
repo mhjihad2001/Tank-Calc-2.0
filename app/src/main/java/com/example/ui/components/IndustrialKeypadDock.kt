@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -25,10 +26,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.engine.ExpressionEvaluator
@@ -51,9 +56,13 @@ fun IndustrialKeypadDock(
     validationWarning: String? = null,
     outlierWarning: String? = null,
     livePreviewText: String? = null,
-    cursorSelection: androidx.compose.ui.text.TextRange? = null,
+    cursorSelection: TextRange? = null,
     onValueChange: (String) -> Unit,
     onValueAndCursorChange: ((String, Int) -> Unit)? = null,
+    onInsertText: ((String) -> Unit)? = null,
+    onBackspace: (() -> Boolean)? = null,
+    onMoveCursor: ((Int) -> Boolean)? = null,
+    onSelectAll: (() -> Unit)? = null,
     onEnterMoveDown: () -> Unit,
     onMoveUp: (() -> Unit)? = null,
     onTabMoveRight: () -> Unit,
@@ -110,41 +119,88 @@ fun IndustrialKeypadDock(
         }
     }
 
+    // Fallback cursor position for standalone spreadsheet/modal callers without platform TextField selection
+    var localCursorPos by remember(cellCoordinateLabel, columnTitle) {
+        mutableIntStateOf(valueText.length)
+    }
+    LaunchedEffect(valueText) {
+        if (localCursorPos > valueText.length) {
+            localCursorPos = valueText.length
+        }
+    }
+
+    val effectiveSelection = remember(cursorSelection, localCursorPos, valueText) {
+        if (cursorSelection != null) {
+            TextRange(
+                cursorSelection.min.coerceIn(0, valueText.length),
+                cursorSelection.max.coerceIn(0, valueText.length)
+            )
+        } else {
+            val safe = localCursorPos.coerceIn(0, valueText.length)
+            TextRange(safe, safe)
+        }
+    }
+
     fun updateText(newText: String, newCursor: Int = newText.length) {
+        val safeCursor = newCursor.coerceIn(0, newText.length)
+        localCursorPos = safeCursor
         if (onValueAndCursorChange != null) {
-            onValueAndCursorChange(newText, newCursor.coerceIn(0, newText.length))
+            onValueAndCursorChange(newText, safeCursor)
         } else {
             onValueChange(newText)
         }
     }
 
     fun insertAtCursor(insertStr: String) {
-        if (onValueAndCursorChange != null && cursorSelection != null) {
-            val start = cursorSelection.min.coerceIn(0, valueText.length)
-            val end = cursorSelection.max.coerceIn(0, valueText.length)
+        if (onInsertText != null) {
+            onInsertText(insertStr)
+        } else if (onValueAndCursorChange != null) {
+            val start = effectiveSelection.min.coerceIn(0, valueText.length)
+            val end = effectiveSelection.max.coerceIn(0, valueText.length)
             val updated = valueText.substring(0, start) + insertStr + valueText.substring(end)
-            onValueAndCursorChange(updated, start + insertStr.length)
+            val nextCursor = start + insertStr.length
+            localCursorPos = nextCursor
+            onValueAndCursorChange(updated, nextCursor)
         } else {
-            onValueChange(valueText + insertStr)
+            val pos = localCursorPos.coerceIn(0, valueText.length)
+            val updated = valueText.substring(0, pos) + insertStr + valueText.substring(pos)
+            localCursorPos = pos + insertStr.length
+            onValueChange(updated)
         }
     }
 
-    fun deleteAtCursor() {
-        if (valueText.isEmpty()) return
-        if (onValueAndCursorChange != null && cursorSelection != null) {
-            val start = cursorSelection.min.coerceIn(0, valueText.length)
-            val end = cursorSelection.max.coerceIn(0, valueText.length)
-            if (start != end) {
-                val updated = valueText.substring(0, start) + valueText.substring(end)
-                onValueAndCursorChange(updated, start)
-            } else if (start > 0) {
-                val updated = valueText.substring(0, start - 1) + valueText.substring(start)
-                val cleaned = if (!isTextMode && !activeTextLayout && updated == "-") "" else updated
-                onValueAndCursorChange(cleaned, (start - 1).coerceAtMost(cleaned.length))
-            }
+    fun deleteAtCursor(): Boolean {
+        if (valueText.isEmpty()) return false
+        if (onBackspace != null) {
+            return onBackspace()
+        }
+        val start = effectiveSelection.min.coerceIn(0, valueText.length)
+        val end = effectiveSelection.max.coerceIn(0, valueText.length)
+        if (start != end) {
+            val updated = valueText.substring(0, start) + valueText.substring(end)
+            updateText(updated, start)
+            return true
+        } else if (start > 0) {
+            val updated = valueText.substring(0, start - 1) + valueText.substring(start)
+            val cleaned = if (!isTextMode && !activeTextLayout && updated == "-") "" else updated
+            updateText(cleaned, (start - 1).coerceAtMost(cleaned.length))
+            return true
+        }
+        return false
+    }
+
+    fun nudgeCursor(delta: Int) {
+        if (onMoveCursor != null) {
+            val moved = onMoveCursor(delta)
+            haptics.trigger(if (moved) HapticEvent.KEY_TAP else HapticEvent.BOUNDARY_LIMIT)
         } else {
-            val next = valueText.dropLast(1)
-            onValueChange(if (!isTextMode && !activeTextLayout && next == "-") "" else next)
+            val next = (localCursorPos + delta).coerceIn(0, valueText.length)
+            if (next != localCursorPos) {
+                localCursorPos = next
+                haptics.trigger(HapticEvent.KEY_TAP)
+            } else {
+                haptics.trigger(HapticEvent.BOUNDARY_LIMIT)
+            }
         }
     }
 
@@ -382,12 +438,16 @@ fun IndustrialKeypadDock(
                 }
             }
 
-            // 3. Value / Formula Display Box + Quick Navigation Arrows
+            // 3. Value / Formula Display Box (with live caret & selection) + Cursor & Row Controls
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
+                val primaryColor = MaterialTheme.colorScheme.primary
+                val selectionBg = MaterialTheme.colorScheme.primaryContainer
+                val selectionFg = MaterialTheme.colorScheme.onPrimaryContainer
+
                 Row(
                     modifier = Modifier
                         .weight(1f)
@@ -401,11 +461,22 @@ fun IndustrialKeypadDock(
                             when {
                                 effectiveWarning != null -> MaterialTheme.colorScheme.error
                                 formulaPreviewBadge != null -> Color(0xFF0D9488)
-                                else -> MaterialTheme.colorScheme.primary
+                                else -> primaryColor
                             },
                             RoundedCornerShape(8.dp)
                         )
-                        .padding(horizontal = 10.dp),
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable {
+                            if (valueText.isNotEmpty()) {
+                                haptics.trigger(HapticEvent.CELL_SELECT)
+                                if (onSelectAll != null) {
+                                    onSelectAll()
+                                } else {
+                                    localCursorPos = valueText.length
+                                }
+                            }
+                        }
+                        .padding(horizontal = 9.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
@@ -417,51 +488,82 @@ fun IndustrialKeypadDock(
                         style = MaterialTheme.typography.labelMedium,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        color = if (evalResult.isExpression) Color(0xFF0D9488) else MaterialTheme.colorScheme.primary,
+                        color = if (evalResult.isExpression) Color(0xFF0D9488) else primaryColor,
                         modifier = Modifier.padding(end = 6.dp)
                     )
 
                     val placeholderText = if (activeTextLayout) "Type text..." else "0"
-                    Text(
-                        text = if (valueText.isEmpty()) placeholderText else valueText,
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontFamily = if (activeTextLayout) FontFamily.Default else FontFamily.Monospace,
-                            fontWeight = if (activeTextLayout) FontWeight.SemiBold else FontWeight.ExtraBold,
-                            fontSize = if (activeTextLayout) 15.sp else 17.sp
-                        ),
-                        color = if (valueText.isEmpty()) {
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
+                    if (valueText.isEmpty()) {
+                        Text(
+                            text = placeholderText,
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontFamily = if (activeTextLayout) FontFamily.Default else FontFamily.Monospace,
+                                fontWeight = if (activeTextLayout) FontWeight.SemiBold else FontWeight.ExtraBold,
+                                fontSize = if (activeTextLayout) 15.sp else 17.sp
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                    } else {
+                        val annotatedDisplay = remember(valueText, effectiveSelection, primaryColor, selectionBg, selectionFg) {
+                            val selMin = effectiveSelection.min.coerceIn(0, valueText.length)
+                            val selMax = effectiveSelection.max.coerceIn(0, valueText.length)
+                            buildAnnotatedString {
+                                append(valueText.substring(0, selMin))
+                                if (selMin == selMax) {
+                                    withStyle(SpanStyle(color = primaryColor, fontWeight = FontWeight.Black)) {
+                                        append("|")
+                                    }
+                                } else {
+                                    withStyle(SpanStyle(background = selectionBg, color = selectionFg)) {
+                                        append(valueText.substring(selMin, selMax))
+                                    }
+                                }
+                                append(valueText.substring(selMax))
+                            }
+                        }
+                        Text(
+                            text = annotatedDisplay,
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontFamily = if (activeTextLayout) FontFamily.Default else FontFamily.Monospace,
+                                fontWeight = if (activeTextLayout) FontWeight.SemiBold else FontWeight.ExtraBold,
+                                fontSize = if (activeTextLayout) 15.sp else 17.sp
+                            ),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
 
                     if (!unitBadge.isNullOrBlank()) {
                         Text(
                             text = unitBadge,
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary,
+                            color = primaryColor,
                             modifier = Modifier.padding(start = 6.dp)
                         )
                     }
                 }
 
-                // Shift+Tab (Left)
-                if (onShiftTabMoveLeft != null) {
-                    KeypadIconButton(
-                        icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                        contentDescription = "Previous column",
-                        onClick = {
-                            haptics.trigger(HapticEvent.NAV_STEP)
-                            commitFormulaIfNeeded()
-                            onShiftTabMoveLeft()
-                        }
-                    )
-                }
+                // Cursor Left (◀)
+                KeypadIconButton(
+                    icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                    contentDescription = "Move cursor left",
+                    modifier = Modifier.testTag("keypad_cursor_left"),
+                    onClick = { nudgeCursor(-1) }
+                )
+
+                // Cursor Right (▶)
+                KeypadIconButton(
+                    icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = "Move cursor right",
+                    modifier = Modifier.testTag("keypad_cursor_right"),
+                    onClick = { nudgeCursor(+1) }
+                )
 
                 // Up Row
                 if (onMoveUp != null) {
@@ -490,16 +592,24 @@ fun IndustrialKeypadDock(
 
             // 4A. NUMERIC (123) MODE
             if (!activeTextLayout) {
+                val opDelimiters = charArrayOf('+', '-', '*', '/', '×', '÷', '(', ')', '=')
+
                 val appendNumericChar: (String) -> Unit = { ch ->
+                    val selMin = effectiveSelection.min.coerceIn(0, valueText.length)
+                    val selMax = effectiveSelection.max.coerceIn(0, valueText.length)
                     when (ch) {
                         "." -> {
-                            val lastToken = valueText.split('+', '-', '*', '/', '×', '÷', '(', ')', '=').lastOrNull() ?: ""
-                            if (!lastToken.contains(".")) {
+                            // Inspect only the numeric token surrounding the cursor (excluding selected text being replaced)
+                            val beforeCursor = valueText.substring(0, selMin)
+                            val afterCursor = valueText.substring(selMax)
+                            val leftToken = beforeCursor.substringAfterLastAny(opDelimiters)
+                            val rightToken = afterCursor.substringBeforeFirstAny(opDelimiters)
+                            val activeToken = leftToken + rightToken
+                            if (!activeToken.contains(".")) {
                                 haptics.trigger(HapticEvent.KEY_OPERATOR)
-                                val ins = if (lastToken.isEmpty()) "0." else "."
+                                val ins = if (leftToken.isEmpty()) "0." else "."
                                 insertAtCursor(ins)
                             } else {
-                                // Smart boundary bump when decimal point already exists in current number
                                 haptics.trigger(HapticEvent.BOUNDARY_LIMIT)
                             }
                         }
@@ -507,15 +617,20 @@ fun IndustrialKeypadDock(
                             if (valueText.isEmpty()) {
                                 if (ch == "-" && (allowNegative || isTextMode)) {
                                     haptics.trigger(HapticEvent.KEY_OPERATOR)
-                                    updateText("-")
+                                    insertAtCursor("-")
                                 } else {
                                     haptics.trigger(HapticEvent.BOUNDARY_LIMIT)
                                 }
                             } else {
                                 haptics.trigger(HapticEvent.KEY_OPERATOR)
-                                val lastChar = valueText.last()
-                                if (lastChar == '+' || lastChar == '-' || lastChar == '*' || lastChar == '/' || lastChar == '×' || lastChar == '÷') {
-                                    updateText(valueText.dropLast(1) + ch)
+                                val charBefore = if (selMin > 0 && selMin == selMax) valueText[selMin - 1] else null
+                                if (charBefore != null && (charBefore == '+' || charBefore == '-' || charBefore == '*' || charBefore == '/' || charBefore == '×' || charBefore == '÷')) {
+                                    // Replace consecutive operator immediately before cursor
+                                    if (deleteAtCursor()) {
+                                        insertAtCursor(ch)
+                                    } else {
+                                        insertAtCursor(ch)
+                                    }
                                 } else {
                                     insertAtCursor(ch)
                                 }
@@ -524,14 +639,14 @@ fun IndustrialKeypadDock(
                         "=" -> {
                             if (valueText.isEmpty()) {
                                 haptics.trigger(HapticEvent.KEY_OPERATOR)
-                                updateText("=")
+                                insertAtCursor("=")
                             } else {
                                 val check = ExpressionEvaluator.evaluate(valueText)
                                 if (check.value != null) {
                                     haptics.trigger(HapticEvent.SUCCESS)
                                     val formatted = ExpressionEvaluator.formatResult(check.value, maxDecimals)
                                     lastValidCommittedText = formatted
-                                    updateText(formatted)
+                                    updateText(formatted, formatted.length)
                                 } else {
                                     haptics.trigger(HapticEvent.WARNING_ALERT)
                                 }
@@ -545,15 +660,15 @@ fun IndustrialKeypadDock(
                                 } else {
                                     "-$valueText"
                                 }
-                                updateText(next)
+                                updateText(next, next.length)
                             } else {
                                 haptics.trigger(HapticEvent.BOUNDARY_LIMIT)
                             }
                         }
                         else -> {
                             haptics.trigger(HapticEvent.KEY_TAP)
-                            if (valueText == "0" && !isTextMode) {
-                                updateText(ch)
+                            if (valueText == "0" && !isTextMode && selMin == 1 && selMax == 1) {
+                                updateText(ch, ch.length)
                             } else {
                                 insertAtCursor(ch)
                             }
@@ -562,12 +677,8 @@ fun IndustrialKeypadDock(
                 }
 
                 val handleBackspace: () -> Unit = {
-                    if (valueText.isEmpty()) {
-                        haptics.trigger(HapticEvent.BOUNDARY_LIMIT)
-                    } else {
-                        haptics.trigger(HapticEvent.KEY_DELETE)
-                        deleteAtCursor()
-                    }
+                    val deleted = deleteAtCursor()
+                    haptics.trigger(if (deleted) HapticEvent.KEY_DELETE else HapticEvent.BOUNDARY_LIMIT)
                 }
 
                 val handleClear: () -> Unit = {
@@ -1080,13 +1191,14 @@ private fun ActionKeyButton(
 private fun KeypadIconButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     contentDescription: String,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         shape = RoundedCornerShape(8.dp),
-        modifier = Modifier
-            .size(38.dp)
+        modifier = modifier
+            .size(34.dp)
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
     ) {
@@ -1095,8 +1207,18 @@ private fun KeypadIconButton(
                 imageVector = icon,
                 contentDescription = contentDescription,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp)
+                modifier = Modifier.size(19.dp)
             )
         }
     }
+}
+
+private fun String.substringAfterLastAny(delimiters: CharArray): String {
+    val idx = lastIndexOfAny(delimiters)
+    return if (idx < 0) this else substring(idx + 1)
+}
+
+private fun String.substringBeforeFirstAny(delimiters: CharArray): String {
+    val idx = indexOfAny(delimiters)
+    return if (idx < 0) this else substring(0, idx)
 }

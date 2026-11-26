@@ -58,6 +58,25 @@ data class BlendingTankCalcInput(
   val isFinalSynced: Boolean = false
 )
 
+data class LossDualComparisonSummary(
+  val activeMethod: TempCorrectionMethod,
+  val densityRefTemp: DensityRefTemp,
+  val vcfTotalFeed: Double,
+  val vcfTotalProduct: Double,
+  val vcfLoss: Double,
+  val vcfLossPercent: Double,
+  val vccTotalFeed: Double,
+  val vccTotalProduct: Double,
+  val vccLoss: Double,
+  val vccLossPercent: Double,
+  val vcf30TotalFeed: Double,
+  val vcf30TotalProduct: Double,
+  val vcf30Loss: Double,
+  val vcf30LossPercent: Double,
+  val lossDeviationVcfVsVccL: Double,
+  val lossDeviationPercentPoints: Double
+)
+
 data class LossComputationInput(
   val mode: CalculationMode,
   val startTime: String,
@@ -70,7 +89,12 @@ data class LossComputationInput(
   val vcfTableType: VcfTableType = VcfTableType.TABLE_54B,
   val roundVcfTo4Decimals: Boolean = true,
   val roundTempTo025: Boolean = false,
-  val lossThresholdPercent: Double = 1.5
+  val lossThresholdPercent: Double = 1.5,
+  val densityRefTemp: DensityRefTemp = DensityRefTemp.AT_15C,
+  val correctionMethod: TempCorrectionMethod = TempCorrectionMethod.VCF_ASTM,
+  val vccTable: List<DensityCoefficientRow> = ProductionReportSetup.defaultVccTable(),
+  val vcf30Table: List<DensityCoefficientRow> = ProductionReportSetup.defaultVcf30Table(),
+  val customVcfBandParams: List<VcfBandParam> = emptyList()
 )
 
 data class LossComputationResult(
@@ -95,7 +119,8 @@ data class LossComputationResult(
   val totalProductPercent: Double?,
   val lossPercentOnFeed: Double?,
   val productTankLinksSnapshot: Map<String, String>,
-  val warnings: List<String>
+  val warnings: List<String>,
+  val dualComparison: LossDualComparisonSummary? = null
 ) {
   fun toLossReport(id: String = UUID.randomUUID().toString()): LossReport {
     val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
@@ -137,6 +162,13 @@ object LossEngine {
   fun computeLoss(input: LossComputationInput): LossComputationResult {
     val warnings = mutableListOf<String>()
 
+    var vcfFeedSum = 0.0
+    var vccFeedSum = 0.0
+    var vcf30FeedSum = 0.0
+    var vcfProdSum = 0.0
+    var vccProdSum = 0.0
+    var vcf30ProdSum = 0.0
+
     // 1. Process Feed Tanks
     val calculatedFeedTanks = input.feedTanks.map { feed ->
       val initTov = feed.initialTov
@@ -148,12 +180,39 @@ object LossEngine {
         val tInit = feed.initialTemp ?: 25.0
         val tFinal = feed.finalTemp ?: 25.0
 
-        val vcfInit = VcfEngine.calculateVcf(density, tInit, input.vcfTableType, input.roundVcfTo4Decimals, input.roundTempTo025)
-        val vcfFinal = VcfEngine.calculateVcf(density, tFinal, input.vcfTableType, input.roundVcfTo4Decimals, input.roundTempTo025)
-        val vcf30 = VcfEngine.calculateVcf(density, 30.0, input.vcfTableType, input.roundVcfTo4Decimals, input.roundTempTo025)
+        val dualInit = VcfEngine.calculateDual30C(
+          observedVolume = initTov,
+          observedTemp = tInit,
+          inputDensity = density,
+          densityRefTemp = input.densityRefTemp,
+          tableType = input.vcfTableType,
+          round4 = input.roundVcfTo4Decimals,
+          roundTemp025 = input.roundTempTo025,
+          vccTable = input.vccTable,
+          vcf30Table = input.vcf30Table,
+          customBands = input.customVcfBandParams,
+          preferredMethod = input.correctionMethod
+        )
+        val dualFinal = VcfEngine.calculateDual30C(
+          observedVolume = finalTov,
+          observedTemp = tFinal,
+          inputDensity = density,
+          densityRefTemp = input.densityRefTemp,
+          tableType = input.vcfTableType,
+          round4 = input.roundVcfTo4Decimals,
+          roundTemp025 = input.roundTempTo025,
+          vccTable = input.vccTable,
+          vcf30Table = input.vcf30Table,
+          customBands = input.customVcfBandParams,
+          preferredMethod = input.correctionMethod
+        )
 
-        val initTov30 = if (vcf30.vcf > 0) initTov * vcfInit.vcf / vcf30.vcf else initTov
-        val finalTov30 = if (vcf30.vcf > 0) finalTov * vcfFinal.vcf / vcf30.vcf else finalTov
+        vcfFeedSum += (dualInit.volume30Vcf - dualFinal.volume30Vcf + rec)
+        vccFeedSum += (dualInit.volume30Vcc - dualFinal.volume30Vcc + rec)
+        vcf30FeedSum += (dualInit.volume30Vcf30Table - dualFinal.volume30Vcf30Table + rec)
+
+        val initTov30 = dualInit.selectedVolume30
+        val finalTov30 = dualFinal.selectedVolume30
         val netQty = initTov30 - finalTov30 + rec
 
         LossTankEntry(
@@ -161,11 +220,11 @@ object LossEngine {
           initialTov = initTov,
           finalTov = finalTov,
           receivingAmount = rec,
-          density15 = feed.density15,
+          density15 = dualInit.rho15KgM3,
           initialTemp = feed.initialTemp,
           finalTemp = feed.finalTemp,
-          initialVcf = vcfInit.vcf,
-          finalVcf = vcfFinal.vcf,
+          initialVcf = dualInit.vcfObserved.vcf,
+          finalVcf = dualFinal.vcfObserved.vcf,
           initialTov30 = initTov30,
           finalTov30 = finalTov30,
           netQuantity = netQty,
@@ -303,12 +362,39 @@ object LossEngine {
         val tInit = prod.initialTemp ?: 25.0
         val tFinal = prod.finalTemp ?: 25.0
 
-        val vcfInit = VcfEngine.calculateVcf(density, tInit, input.vcfTableType, input.roundVcfTo4Decimals, input.roundTempTo025)
-        val vcfFinal = VcfEngine.calculateVcf(density, tFinal, input.vcfTableType, input.roundVcfTo4Decimals, input.roundTempTo025)
-        val vcf30 = VcfEngine.calculateVcf(density, 30.0, input.vcfTableType, input.roundVcfTo4Decimals, input.roundTempTo025)
+        val dualInit = VcfEngine.calculateDual30C(
+          observedVolume = initTov,
+          observedTemp = tInit,
+          inputDensity = density,
+          densityRefTemp = input.densityRefTemp,
+          tableType = input.vcfTableType,
+          round4 = input.roundVcfTo4Decimals,
+          roundTemp025 = input.roundTempTo025,
+          vccTable = input.vccTable,
+          vcf30Table = input.vcf30Table,
+          customBands = input.customVcfBandParams,
+          preferredMethod = input.correctionMethod
+        )
+        val dualFinal = VcfEngine.calculateDual30C(
+          observedVolume = finalTov,
+          observedTemp = tFinal,
+          inputDensity = density,
+          densityRefTemp = input.densityRefTemp,
+          tableType = input.vcfTableType,
+          round4 = input.roundVcfTo4Decimals,
+          roundTemp025 = input.roundTempTo025,
+          vccTable = input.vccTable,
+          vcf30Table = input.vcf30Table,
+          customBands = input.customVcfBandParams,
+          preferredMethod = input.correctionMethod
+        )
 
-        val initTov30 = if (vcf30.vcf > 0) initTov * vcfInit.vcf / vcf30.vcf else initTov
-        val finalTov30 = if (vcf30.vcf > 0) finalTov * vcfFinal.vcf / vcf30.vcf else finalTov
+        vcfProdSum += (dualFinal.volume30Vcf - (dualInit.volume30Vcf + blendedInAmt) + totalBlendingOut + del)
+        vccProdSum += (dualFinal.volume30Vcc - (dualInit.volume30Vcc + blendedInAmt) + totalBlendingOut + del)
+        vcf30ProdSum += (dualFinal.volume30Vcf30Table - (dualInit.volume30Vcf30Table + blendedInAmt) + totalBlendingOut + del)
+
+        val initTov30 = dualInit.selectedVolume30
+        val finalTov30 = dualFinal.selectedVolume30
 
         val effectiveInitTov30 = initTov30 + blendedInAmt
         val effectiveInitTov = initTov + blendedInAmt
@@ -327,11 +413,11 @@ object LossEngine {
           receivingAmount = 0.0,
           blendingAmount = totalBlendingOut,
           deliveryAmount = del,
-          density15 = density,
+          density15 = dualInit.rho15KgM3,
           initialTemp = tInit,
           finalTemp = tFinal,
-          initialVcf = vcfInit.vcf,
-          finalVcf = vcfFinal.vcf,
+          initialVcf = dualInit.vcfObserved.vcf,
+          finalVcf = dualFinal.vcfObserved.vcf,
           initialTov30 = initTov30,
           finalTov30 = finalTov30,
           netQuantity = netQty,
@@ -401,12 +487,39 @@ object LossEngine {
         val tInit = bTank.initialTemp ?: 25.0
         val tFinal = bTank.finalTemp ?: 25.0
 
-        val vcfInit = VcfEngine.calculateVcf(density, tInit, input.vcfTableType, input.roundVcfTo4Decimals, input.roundTempTo025)
-        val vcfFinal = VcfEngine.calculateVcf(density, tFinal, input.vcfTableType, input.roundVcfTo4Decimals, input.roundTempTo025)
-        val vcf30 = VcfEngine.calculateVcf(density, 30.0, input.vcfTableType, input.roundVcfTo4Decimals, input.roundTempTo025)
+        val dualInit = VcfEngine.calculateDual30C(
+          observedVolume = initTov,
+          observedTemp = tInit,
+          inputDensity = density,
+          densityRefTemp = input.densityRefTemp,
+          tableType = input.vcfTableType,
+          round4 = input.roundVcfTo4Decimals,
+          roundTemp025 = input.roundTempTo025,
+          vccTable = input.vccTable,
+          vcf30Table = input.vcf30Table,
+          customBands = input.customVcfBandParams,
+          preferredMethod = input.correctionMethod
+        )
+        val dualFinal = VcfEngine.calculateDual30C(
+          observedVolume = finalTov,
+          observedTemp = tFinal,
+          inputDensity = density,
+          densityRefTemp = input.densityRefTemp,
+          tableType = input.vcfTableType,
+          round4 = input.roundVcfTo4Decimals,
+          roundTemp025 = input.roundTempTo025,
+          vccTable = input.vccTable,
+          vcf30Table = input.vcf30Table,
+          customBands = input.customVcfBandParams,
+          preferredMethod = input.correctionMethod
+        )
 
-        val initTov30 = if (vcf30.vcf > 0) initTov * vcfInit.vcf / vcf30.vcf else initTov
-        val finalTov30 = if (vcf30.vcf > 0) finalTov * vcfFinal.vcf / vcf30.vcf else finalTov
+        vcfProdSum += (dualFinal.volume30Vcf - (dualInit.volume30Vcf + blendedInAmt) + del)
+        vccProdSum += (dualFinal.volume30Vcc - (dualInit.volume30Vcc + blendedInAmt) + del)
+        vcf30ProdSum += (dualFinal.volume30Vcf30Table - (dualInit.volume30Vcf30Table + blendedInAmt) + del)
+
+        val initTov30 = dualInit.selectedVolume30
+        val finalTov30 = dualFinal.selectedVolume30
 
         val effectiveInitTov30 = initTov30 + blendedInAmt
         val effectiveInitTov = initTov + blendedInAmt
@@ -425,11 +538,11 @@ object LossEngine {
           receivingAmount = 0.0,
           blendingAmount = 0.0,
           deliveryAmount = del,
-          density15 = density,
+          density15 = dualInit.rho15KgM3,
           initialTemp = tInit,
           finalTemp = tFinal,
-          initialVcf = vcfInit.vcf,
-          finalVcf = vcfFinal.vcf,
+          initialVcf = dualInit.vcfObserved.vcf,
+          finalVcf = dualFinal.vcfObserved.vcf,
           initialTov30 = initTov30,
           finalTov30 = finalTov30,
           netQuantity = netQty,
@@ -595,6 +708,33 @@ object LossEngine {
     // Sort by quantity descending as required:
     val sortedProductYields = productYieldEntries.sortedByDescending { it.productMade }
 
+    val dualComparison = if (input.mode == CalculationMode.TEMP_30C) {
+      val vcfLossVal = vcfFeedSum - vcfProdSum
+      val vcfLossPct = if (vcfFeedSum > 0.0) (vcfLossVal / vcfFeedSum) * 100.0 else 0.0
+      val vccLossVal = vccFeedSum - vccProdSum
+      val vccLossPct = if (vccFeedSum > 0.0) (vccLossVal / vccFeedSum) * 100.0 else 0.0
+      val vcf30LossVal = vcf30FeedSum - vcf30ProdSum
+      val vcf30LossPct = if (vcf30FeedSum > 0.0) (vcf30LossVal / vcf30FeedSum) * 100.0 else 0.0
+      LossDualComparisonSummary(
+        activeMethod = input.correctionMethod,
+        densityRefTemp = input.densityRefTemp,
+        vcfTotalFeed = vcfFeedSum,
+        vcfTotalProduct = vcfProdSum,
+        vcfLoss = vcfLossVal,
+        vcfLossPercent = vcfLossPct,
+        vccTotalFeed = vccFeedSum,
+        vccTotalProduct = vccProdSum,
+        vccLoss = vccLossVal,
+        vccLossPercent = vccLossPct,
+        vcf30TotalFeed = vcf30FeedSum,
+        vcf30TotalProduct = vcf30ProdSum,
+        vcf30Loss = vcf30LossVal,
+        vcf30LossPercent = vcf30LossPct,
+        lossDeviationVcfVsVccL = vcfLossVal - vccLossVal,
+        lossDeviationPercentPoints = vcfLossPct - vccLossPct
+      )
+    } else null
+
     return LossComputationResult(
       mode = input.mode,
       startTime = input.startTime,
@@ -617,7 +757,8 @@ object LossEngine {
       totalProductPercent = totalProductPercent,
       lossPercentOnFeed = lossPercentOnFeed,
       productTankLinksSnapshot = productTankLinksSnapshot,
-      warnings = warnings
+      warnings = warnings,
+      dualComparison = dualComparison
     )
   }
 }
